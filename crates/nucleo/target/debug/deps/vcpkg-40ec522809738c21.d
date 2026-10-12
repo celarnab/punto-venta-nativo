@@ -1,0 +1,7 @@
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/vcpkg-40ec522809738c21.d: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vcpkg-0.2.15/src/lib.rs
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libvcpkg-40ec522809738c21.rlib: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vcpkg-0.2.15/src/lib.rs
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libvcpkg-40ec522809738c21.rmeta: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vcpkg-0.2.15/src/lib.rs
+
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/vcpkg-0.2.15/src/lib.rs:

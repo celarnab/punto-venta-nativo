@@ -1,0 +1,20 @@
+[package]
+name = "nucleo"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+argon2 = "0.6.0"
+calamine = "0.36.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "functions", "chrono", "backup"] }
+rusqlite_migration = "2.6.0"
+rust_xlsxwriter = "0.99.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+unicode-normalization = "0.1.25"
+
+[dev-dependencies]
+serde_json = "1.0.154"
+tempfile = "3.27.0"

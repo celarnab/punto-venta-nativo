@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=README.md
+Wrote 176 lines from the README to the rustdoc.

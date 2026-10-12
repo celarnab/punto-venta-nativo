@@ -1,0 +1,11 @@
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/blake2-2483e2f6ee544606.d: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/consts.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/simd.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/macros.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/../README.md
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libblake2-2483e2f6ee544606.rlib: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/consts.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/simd.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/macros.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/../README.md
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libblake2-2483e2f6ee544606.rmeta: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/consts.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/simd.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/macros.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/../README.md
+
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/lib.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/consts.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/simd.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/macros.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/blake2-0.11.0/src/../README.md:

@@ -1,0 +1,14 @@
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/serde-093987d1527a3e6a.d: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/christian/code/punto-venta-app/crates/nucleo/target/debug/build/serde-045d6d86c89f5c13/out/private.rs
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libserde-093987d1527a3e6a.rlib: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/christian/code/punto-venta-app/crates/nucleo/target/debug/build/serde-045d6d86c89f5c13/out/private.rs
+
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/deps/libserde-093987d1527a3e6a.rmeta: /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /home/christian/code/punto-venta-app/crates/nucleo/target/debug/build/serde-045d6d86c89f5c13/out/private.rs
+
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/home/christian/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/home/christian/code/punto-venta-app/crates/nucleo/target/debug/build/serde-045d6d86c89f5c13/out/private.rs:
+
+# env-dep:OUT_DIR=/home/christian/code/punto-venta-app/crates/nucleo/target/debug/build/serde-045d6d86c89f5c13/out

@@ -1,0 +1,1 @@
+{"rustc":5244445300240561903,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[10041615913925572745,"build_script_build",false,769541847860943917]],"local":[{"RerunIfChanged":{"output":"debug/build/rusqlite_migration-dcd7d7ddc05c499a/output","paths":["README.md"]}}],"rustflags":[],"config":0,"compile_kind":0}

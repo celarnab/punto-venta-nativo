@@ -15,6 +15,7 @@ export component Ajustes inherits Rectangle {
     property <int> columnas: Api.impresora.columnas == 32 ? 0 : Api.impresora.columnas == 48 ? 2 : 1;
     property <bool> cajon: Api.impresora.abrir-cajon;
     property <bool> automatico: Api.impresora.automatico;
+    property <bool> imprimir-corte: Api.impresora.imprimir-corte;
     init => { Api.cargar-ajustes(); }
 
     function guardar-impresora() {
@@ -23,6 +24,7 @@ export component Ajustes inherits Rectangle {
             columnas: columnas == 0 ? 32 : columnas == 2 ? 48 : 42,
             abrir-cajon: cajon,
             automatico: automatico,
+            imprimir-corte: imprimir-corte,
         });
     }
 
@@ -85,6 +87,7 @@ export component Ajustes inherits Rectangle {
                         }
                         CheckBox { text: "Abrir el cajón de dinero al cobrar en efectivo"; checked <=> cajon; toggled => { guardar-impresora(); } }
                         CheckBox { text: "Imprimir el ticket al cobrar, sin preguntar"; checked <=> automatico; toggled => { guardar-impresora(); } }
+                        CheckBox { text: "Imprimir el corte al cerrar la caja"; checked <=> imprimir-corte; toggled => { guardar-impresora(); } }
                         Button { text: "Imprimir ticket de prueba"; clicked => { Api.probar-impresora(); } }
                     }
                 }

@@ -73,14 +73,18 @@ export component Caja inherits Rectangle {
                     padding: 14px;
                     spacing: 8px;
                     Subtitulo { text: "Cerrar caja"; }
-                    Nota { text: "Cuenta el efectivo del cajón (incluido el fondo) y escríbelo. Se imprime el corte."; }
+                    Nota { text: "Cuenta el efectivo del cajón (incluido el fondo) y escríbelo. Verás el corte con el faltante o sobrante."; }
                     contado := Campo { etiqueta: "Efectivo contado"; numero: true; placeholder: "0.00"; }
                     if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
                     Button {
                         text: "Cerrar caja y hacer corte";
                         primary: true;
                         enabled: contado.text != "";
-                        clicked => { error = Api.cerrar-caja(contado.text); }
+                        clicked => {
+                            error = Api.cerrar-caja(contado.text);
+                            // El corte recién hecho es el primero de los anteriores: se muestra de una vez.
+                            if error == "" { viendo = 0; }
+                        }
                     }
                 }
             }

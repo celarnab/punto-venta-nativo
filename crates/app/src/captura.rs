@@ -91,20 +91,14 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 api.invoke_cerrar_detalle();
             }
             "ajustes" => {
-                // Clic en «Nuevo usuario».
-                for evento in [
-                    slint::platform::WindowEvent::PointerPressed {
-                        position: slint::LogicalPosition::new(1058.0, 74.0),
-                        button: slint::platform::PointerEventButton::Left,
-                    },
-                    slint::platform::WindowEvent::PointerReleased {
-                        position: slint::LogicalPosition::new(1058.0, 74.0),
-                        button: slint::platform::PointerEventButton::Left,
-                    },
-                ] {
-                    app.window().dispatch_event(evento);
-                }
+                clic(&app, 1058.0, 74.0); // «Nuevo usuario»
                 foto("16-usuario")?;
+            }
+            "caja" => {
+                clic(&app, 775.0, 195.0); // «Efectivo contado»
+                escribir(&app, "1400");
+                clic(&app, 775.0, 235.0); // «Cerrar caja y hacer corte»
+                foto("10b-corte")?;
             }
             "productos" => {
                 api.invoke_editar_producto(ids.tornillo as i32);
@@ -116,6 +110,21 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("Capturas en {}", carpeta.display());
     Ok(())
+}
+
+fn clic(app: &App, x: f32, y: f32) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let position = slint::LogicalPosition::new(x, y);
+    app.window().dispatch_event(WindowEvent::PointerPressed { position, button: PointerEventButton::Left });
+    app.window().dispatch_event(WindowEvent::PointerReleased { position, button: PointerEventButton::Left });
+}
+
+fn escribir(app: &App, texto: &str) {
+    use slint::platform::WindowEvent;
+    for letra in texto.chars() {
+        app.window().dispatch_event(WindowEvent::KeyPressed { text: letra.into() });
+        app.window().dispatch_event(WindowEvent::KeyReleased { text: letra.into() });
+    }
 }
 
 /// Dos pasadas: la primera crea la pantalla (y dispara sus `init`), la segunda pinta lo que cargaron.

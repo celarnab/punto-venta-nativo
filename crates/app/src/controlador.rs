@@ -429,7 +429,10 @@ pub fn conectar(app: &App, estado: Compartido) {
         });
         match resultado {
             Ok(corte) => {
-                if let Ok(negocio) = e.bd.negocio() {
+                // El corte se ve en pantalla; en papel solo si así se configuró (o con «Imprimir»).
+                if e.configuracion.imprimir_corte
+                    && let Ok(negocio) = e.bd.negocio()
+                {
                     let doc = impresion::corte(&negocio, &corte);
                     if let Err(error) = imprimir::documento(&e.configuracion, &e.carpeta, "corte", &doc, false) {
                         avisar(&app, error, true);
@@ -691,6 +694,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         e.configuracion.columnas = impresora.columnas.max(24) as usize;
         e.configuracion.abrir_cajon = impresora.abrir_cajon;
         e.configuracion.automatico = impresora.automatico;
+        e.configuracion.imprimir_corte = impresora.imprimir_corte;
         if let Err(error) = e.configuracion.guardar(&e.carpeta) {
             avisar(&app, format!("No se pudo guardar la configuración: {error}"), true);
         }
@@ -1225,6 +1229,7 @@ fn refrescar_ajustes(app: &App, e: &Estado) {
         columnas: e.configuracion.columnas as i32,
         abrir_cajon: e.configuracion.abrir_cajon,
         automatico: e.configuracion.automatico,
+        imprimir_corte: e.configuracion.imprimir_corte,
     });
     api.set_carpeta_datos(e.carpeta.display().to_string().into());
 }

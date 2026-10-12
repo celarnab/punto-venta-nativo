@@ -1,0 +1,40 @@
+import { Palette } from "std-widgets.slint";
+import { Api } from "api.slint";
+import { Tema } from "comunes.slint";
+import { Configurar, Entrar } from "pantallas/inicio.slint";
+import { Principal } from "pantallas/principal.slint";
+
+export { Api }
+
+export component App inherits Window {
+    title: "Punto de Venta — " + Api.negocio-nombre;
+    icon: @image-url("../icons/128x128.png");
+    min-width: 1100px;
+    min-height: 680px;
+    preferred-width: 1366px;
+    preferred-height: 768px;
+    background: Tema.fondo;
+    default-font-size: 13px;
+    init => { Palette.color-scheme = ColorScheme.light; }
+
+    if !Api.hay-usuarios: Configurar { }
+    if Api.hay-usuarios && !Api.hay-sesion: Entrar { }
+    if Api.hay-sesion: Principal { }
+
+    // Avisos: abajo a la derecha, se quitan solos.
+    if Api.aviso != "": Rectangle {
+        x: root.width - self.width - 16px;
+        y: root.height - self.height - 16px;
+        width: min(460px, texto-aviso.preferred-width + 28px);
+        height: texto-aviso.preferred-height + 18px;
+        background: Api.aviso-error ? Tema.peligro : #26313b;
+        drop-shadow-blur: 8px;
+        drop-shadow-color: #00000040;
+        texto-aviso := Text {
+            text: Api.aviso;
+            color: white;
+            wrap: word-wrap;
+            width: min(432px, self.preferred-width);
+        }
+    }
+}

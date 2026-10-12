@@ -1,0 +1,116 @@
+// Primer arranque y entrada con PIN.
+
+import { Button, LineEdit } from "std-widgets.slint";
+import { Api, UsuarioUi } from "../api.slint";
+import { Tema, Panel, Titulo, Nota, Campo, PinPad } from "../comunes.slint";
+
+export component Configurar inherits Rectangle {
+    background: Tema.fondo;
+    property <string> error;
+    Panel {
+        width: 420px;
+        height: formulario.preferred-height;
+        formulario := VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            Titulo { text: "Configurar el punto de venta"; }
+            Nota { text: "Se pide una sola vez. Todo se puede cambiar después en Ajustes."; }
+            negocio := Campo { etiqueta: "Nombre del negocio"; placeholder: "Ferretería La Tuerca"; }
+            nombre := Campo { etiqueta: "Tu nombre (administrador)"; }
+            HorizontalLayout {
+                spacing: 10px;
+                pin := Campo { etiqueta: "PIN (4 a 8 dígitos)"; tipo: InputType.password; }
+                repetido := Campo { etiqueta: "Repite el PIN"; tipo: InputType.password; }
+            }
+            if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+            Button {
+                text: "Empezar";
+                primary: true;
+                clicked => {
+                    if pin.text != repetido.text {
+                        error = "Los PIN no coinciden.";
+                    } else {
+                        error = Api.configurar(negocio.text, nombre.text, pin.text);
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component Entrar inherits Rectangle {
+    background: Tema.fondo;
+    in-out property <int> elegido: Api.usuarios-login.length == 1 ? Api.usuarios-login[0].id : 0;
+    property <string> nombre-elegido;
+    property <bool> fallo;
+
+    VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        HorizontalLayout {
+            alignment: center;
+            VerticalLayout {
+                spacing: 2px;
+                Titulo { text: Api.negocio-nombre; horizontal-alignment: center; }
+                Nota { text: Api.fecha-larga; horizontal-alignment: center; }
+            }
+        }
+        if elegido == 0: VerticalLayout {
+            spacing: 10px;
+            Text { text: "¿Quién eres?"; font-size: 15px; font-weight: 700; horizontal-alignment: center; color: Tema.texto; }
+            HorizontalLayout {
+                alignment: center;
+                spacing: 10px;
+                for u in Api.usuarios-login: Panel {
+                    width: 150px;
+                    height: 70px;
+                    border-color: toque.has-hover ? Tema.acento : Tema.borde;
+                    VerticalLayout {
+                        alignment: center;
+                        Text { text: u.nombre; font-size: 15px; font-weight: 700; horizontal-alignment: center; color: Tema.texto; }
+                        Text { text: u.admin ? "Administrador" : "Cajero"; font-size: 12px; horizontal-alignment: center; color: Tema.texto-2; }
+                    }
+                    toque := TouchArea {
+                        clicked => {
+                            elegido = u.id;
+                            nombre-elegido = u.nombre;
+                        }
+                    }
+                }
+            }
+        }
+        if elegido != 0: HorizontalLayout {
+            alignment: center;
+            Panel {
+                width: 300px;
+                height: caja.preferred-height;
+                caja := VerticalLayout {
+                    padding: 20px;
+                    spacing: 10px;
+                    Text {
+                        text: "Hola, " + (nombre-elegido != "" ? nombre-elegido : Api.usuarios-login[0].nombre);
+                        font-size: 15px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                        color: Tema.texto;
+                    }
+                    if fallo: Text { text: "PIN incorrecto."; color: Tema.peligro; horizontal-alignment: center; }
+                    teclado := PinPad {
+                        init => { self.enfocar(); }
+                        enviar(pin) => {
+                            fallo = !Api.entrar(elegido, pin);
+                            self.pin = "";
+                        }
+                    }
+                    if Api.usuarios-login.length > 1: Button {
+                        text: "No soy yo";
+                        clicked => {
+                            elegido = 0;
+                            fallo = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

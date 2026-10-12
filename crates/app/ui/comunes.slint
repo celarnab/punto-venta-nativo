@@ -1,0 +1,297 @@
+// Piezas que se repiten en todas las pantallas. Estilo sobrio y funcional: colores planos, bordes
+// claros, tablas densas.
+
+import { Button, LineEdit, VerticalBox } from "std-widgets.slint";
+
+export global Tema {
+    out property <color> fondo: #e9ecef;
+    out property <color> panel: #ffffff;
+    out property <color> panel-2: #f5f6f8;
+    out property <color> borde: #c5ccd3;
+    out property <color> texto: #1d2329;
+    out property <color> texto-2: #56616d;
+    out property <color> texto-3: #8a949e;
+    out property <color> acento: #1f5fad;
+    out property <color> acento-suave: #dde8f6;
+    out property <color> peligro: #b42318;
+    out property <color> peligro-suave: #fbe4e1;
+    out property <color> aviso: #9a5200;
+    out property <color> aviso-suave: #fdf0d9;
+    out property <color> exito: #13773a;
+    out property <color> exito-suave: #dcf2e3;
+    out property <length> fila: 30px;
+}
+
+export component Panel inherits Rectangle {
+    background: Tema.panel;
+    border-color: Tema.borde;
+    border-width: 1px;
+}
+
+export component Titulo inherits Text {
+    font-size: 18px;
+    font-weight: 700;
+    color: Tema.texto;
+}
+
+export component Subtitulo inherits Text {
+    font-size: 14px;
+    font-weight: 700;
+    color: Tema.texto;
+}
+
+export component Nota inherits Text {
+    font-size: 12px;
+    color: Tema.texto-2;
+    wrap: word-wrap;
+}
+
+/// Una etiqueta arriba y un campo de texto abajo.
+export component Campo inherits VerticalLayout {
+    in property <string> etiqueta;
+    in property <string> ayuda;
+    in property <InputType> tipo: InputType.text;
+    in property <bool> numero;
+    in property <bool> habilitado: true;
+    in-out property <string> text <=> entrada.text;
+    in property <string> placeholder <=> entrada.placeholder-text;
+    callback accepted(string);
+    callback edited(string);
+    public function enfocar() {
+        entrada.focus();
+        entrada.select-all();
+    }
+    spacing: 3px;
+    Text {
+        text: etiqueta;
+        font-size: 12px;
+        color: Tema.texto-2;
+    }
+    entrada := LineEdit {
+        min-width: 40px; // el de los estilos (160 px) desborda los campos angostos
+        input-type: tipo;
+        enabled: habilitado;
+        horizontal-alignment: numero ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+        accepted(t) => { root.accepted(t); }
+        edited(t) => { root.edited(t); }
+    }
+    if ayuda != "": Text {
+        text: ayuda;
+        font-size: 11px;
+        color: Tema.texto-3;
+        wrap: word-wrap;
+    }
+}
+
+export component Insignia inherits Rectangle {
+    in property <string> text;
+    in property <color> tinta: Tema.texto-2;
+    in property <color> fondo: Tema.panel-2;
+    background: fondo;
+    border-radius: 3px;
+    height: 18px;
+    width: etiqueta.preferred-width + 10px;
+    etiqueta := Text {
+        text: root.text;
+        color: root.tinta;
+        font-size: 11px;
+        font-weight: 600;
+    }
+}
+
+/// Encabezado de una columna de tabla.
+export component Columna inherits Text {
+    in property <bool> derecha;
+    font-size: 11px;
+    font-weight: 700;
+    color: Tema.texto-2;
+    vertical-alignment: center;
+    horizontal-alignment: derecha ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+    overflow: elide;
+}
+
+/// Una celda de tabla.
+export component Celda inherits Text {
+    in property <bool> derecha;
+    in property <bool> fuerte;
+    in property <bool> tenue;
+    font-size: 13px;
+    font-weight: fuerte ? 700 : 400;
+    color: tenue ? Tema.texto-3 : Tema.texto;
+    vertical-alignment: center;
+    horizontal-alignment: derecha ? TextHorizontalAlignment.right : TextHorizontalAlignment.left;
+    overflow: elide;
+}
+
+/// Fondo de un renglón de tabla: alterna tonos y se resalta al pasar el mouse o al seleccionarlo.
+export component Renglon inherits Rectangle {
+    in property <int> indice;
+    in property <bool> seleccionado;
+    in property <bool> tenue;
+    callback clicked();
+    height: Tema.fila;
+    background: seleccionado ? Tema.acento-suave : toque.has-hover ? #eef3fa : Math.mod(indice, 2) == 0 ? Tema.panel : #f7f8fa;
+    toque := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        @children
+    }
+}
+
+/// Cabecera gris de una tabla.
+export component Cabecera inherits Rectangle {
+    height: 26px;
+    background: #e3e7eb;
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        spacing: 10px;
+        @children
+    }
+}
+
+/// Ventana encima de la pantalla; Esc o la ✕ la cierran.
+export component Dialogo inherits Rectangle {
+    in property <string> titulo;
+    in property <length> ancho: 440px;
+    callback cerrar();
+    background: #0000005a;
+    TouchArea { }
+    FocusScope {
+        key-pressed(e) => {
+            if e.text == Key.Escape {
+                root.cerrar();
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            x: (root.width - self.width) / 2;
+            y: max(20px, (root.height - self.height) / 2);
+            width: min(root.width - 40px, root.ancho);
+            height: min(root.height - 40px, contenido.preferred-height);
+            background: Tema.panel;
+            border-color: #8f99a3;
+            border-width: 1px;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: #0000004a;
+            contenido := VerticalLayout {
+                Rectangle {
+                    height: 36px;
+                    background: Tema.panel-2;
+                    border-color: Tema.borde;
+                    border-width: 1px;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 6px;
+                        Text {
+                            text: root.titulo;
+                            font-size: 14px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            color: Tema.texto;
+                        }
+                        Rectangle { }
+                        cerrar := Rectangle {
+                            width: 28px;
+                            Text {
+                                text: "✕";
+                                color: cerrar-toque.has-hover ? Tema.peligro : Tema.texto-2;
+                                font-size: 14px;
+                            }
+                            cerrar-toque := TouchArea {
+                                clicked => { root.cerrar(); }
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    padding: 14px;
+                    spacing: 10px;
+                    @children
+                }
+            }
+        }
+    }
+}
+
+/// Teclado numérico para el PIN; también acepta el teclado físico.
+export component PinPad inherits VerticalLayout {
+    in property <string> boton: "Entrar";
+    in-out property <string> pin;
+    callback enviar(string);
+    public function enfocar() {
+        teclas.focus();
+    }
+    spacing: 12px;
+    alignment: center;
+    teclas := FocusScope {
+        key-pressed(e) => {
+            if e.text == Key.Return {
+                if pin.character-count >= 4 { root.enviar(pin); }
+                return accept;
+            }
+            if e.text == Key.Backspace {
+                pin = "";
+                return accept;
+            }
+            if e.text.character-count == 1 && e.text.is-float() && pin.character-count < 8 {
+                pin += e.text;
+                return accept;
+            }
+            reject
+        }
+        Rectangle {
+            height: 40px;
+            border-color: teclas.has-focus ? Tema.acento : Tema.borde;
+            border-width: 1px;
+            background: Tema.panel;
+            // Los puntos de un campo de contraseña, solo para mostrar cuántos dígitos van.
+            LineEdit {
+                text: pin;
+                input-type: InputType.password;
+                read-only: true;
+                enabled: false;
+                placeholder-text: "PIN";
+                horizontal-alignment: center;
+                font-size: 18px;
+            }
+        }
+    }
+    GridLayout {
+        spacing: 6px;
+        Row {
+            Button { text: "1"; height: 44px; clicked => { root.teclear("1"); } }
+            Button { text: "2"; clicked => { root.teclear("2"); } }
+            Button { text: "3"; clicked => { root.teclear("3"); } }
+        }
+        Row {
+            Button { text: "4"; height: 44px; clicked => { root.teclear("4"); } }
+            Button { text: "5"; clicked => { root.teclear("5"); } }
+            Button { text: "6"; clicked => { root.teclear("6"); } }
+        }
+        Row {
+            Button { text: "7"; height: 44px; clicked => { root.teclear("7"); } }
+            Button { text: "8"; clicked => { root.teclear("8"); } }
+            Button { text: "9"; clicked => { root.teclear("9"); } }
+        }
+        Row {
+            Button { text: "Borrar"; height: 44px; clicked => { pin = ""; teclas.focus(); } }
+            Button { text: "0"; clicked => { root.teclear("0"); } }
+            Button {
+                text: root.boton;
+                primary: true;
+                enabled: pin.character-count >= 4;
+                clicked => { root.enviar(pin); }
+            }
+        }
+    }
+    function teclear(d: string) {
+        if pin.character-count < 8 { pin += d; }
+        teclas.focus();
+    }
+}

@@ -1,0 +1,106 @@
+// Cotizaciones guardadas desde «Vender»: imprimirlas, mandarlas en PDF o Excel, o convertirlas en venta.
+
+import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Api } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+
+export component Cotizaciones inherits Rectangle {
+    init => { Api.cargar-cotizaciones(""); }
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                Titulo { text: "Cotizaciones"; }
+                Nota { text: "Se crean desde «Vender» con Cotizar (F6). Mientras estén vigentes, al convertirlas se respetan sus precios."; }
+            }
+            Rectangle { }
+            LineEdit {
+                width: 280px;
+                placeholder-text: "Buscar por folio, cliente o nota";
+                edited(t) => { Api.cargar-cotizaciones(t); }
+            }
+        }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Folio"; width: 60px; }
+                    Columna { text: "Fecha"; width: 90px; }
+                    Columna { text: "Cliente"; width: 200px; }
+                    Columna { text: "Nota"; }
+                    Columna { text: "Vigencia"; width: 130px; }
+                    Columna { text: "Total"; width: 100px; derecha: true; }
+                }
+                if Api.cotizaciones.length == 0: Rectangle {
+                    Nota { text: "No hay cotizaciones."; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                ListView {
+                    for c[i] in Api.cotizaciones: Renglon {
+                        indice: i;
+                        clicked => { Api.ver-cotizacion(c.id); }
+                        Celda { text: c.folio; width: 60px; fuerte: true; }
+                        Celda { text: c.fecha; width: 90px; }
+                        Celda { text: c.cliente; width: 200px; }
+                        Celda { text: c.nota; tenue: true; }
+                        HorizontalLayout {
+                            width: 130px;
+                            Insignia {
+                                y: 6px;
+                                text: c.vencida ? "Vencida" : "Hasta " + c.vigencia;
+                                tinta: c.vencida ? Tema.aviso : Tema.exito;
+                                fondo: c.vencida ? Tema.aviso-suave : Tema.exito-suave;
+                            }
+                        }
+                        Celda { text: c.total; width: 100px; derecha: true; fuerte: true; }
+                    }
+                }
+            }
+        }
+    }
+
+    if Api.mostrando-detalle && Api.detalle.estado == "cotizacion": Dialogo {
+        titulo: "Cotización " + Api.detalle.folio + " · " + Api.detalle.fecha;
+        ancho: 640px;
+        cerrar => { Api.cerrar-detalle(); }
+        HorizontalLayout {
+            spacing: 20px;
+            Nota { text: "Cliente: " + Api.detalle.cliente; }
+            Nota { text: Api.detalle.vencida ? "Venció el " + Api.detalle.vigencia + ": se cobraría a precios de hoy." : "Válida hasta el " + Api.detalle.vigencia; }
+        }
+        if Api.detalle.nota != "": Nota { text: Api.detalle.nota; }
+        Panel {
+            height: min(Api.detalle.partidas.length, 8) * Tema.fila + 28px;
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Producto"; }
+                    Columna { text: "Cantidad"; width: 90px; derecha: true; }
+                    Columna { text: "Precio"; width: 90px; derecha: true; }
+                    Columna { text: "Importe"; width: 90px; derecha: true; }
+                }
+                ListView {
+                    for p[i] in Api.detalle.partidas: Renglon {
+                        indice: i;
+                        Celda { text: p.descripcion; }
+                        Celda { text: p.cantidad + " " + p.unidad; width: 90px; derecha: true; }
+                        Celda { text: p.precio; width: 90px; derecha: true; }
+                        Celda { text: p.importe; width: 90px; derecha: true; }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            Rectangle { }
+            Subtitulo { text: "Total  " + Api.detalle.total; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Borrar"; clicked => { Api.borrar-cotizacion(Api.detalle.id); } }
+            Rectangle { }
+            Button { text: "Ticket"; clicked => { Api.cotizacion-ticket(Api.detalle.id); } }
+            Button { text: "PDF (hoja carta)"; clicked => { Api.cotizacion-pdf(Api.detalle.id); } }
+            Button { text: "Excel"; clicked => { Api.cotizacion-excel(Api.detalle.id); } }
+            Button { text: "Convertir en venta"; primary: true; clicked => { Api.convertir-cotizacion(Api.detalle.id); } }
+        }
+    }
+}

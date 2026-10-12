@@ -1,0 +1,241 @@
+// Ventas por día o por folio: reimprimir, cancelar (mismo día, por error) o registrar una devolución.
+
+import { Button, LineEdit, ListView, ComboBox } from "std-widgets.slint";
+import { Api } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda, PinPad } from "../comunes.slint";
+
+export component Historial inherits Rectangle {
+    property <bool> cancelando;
+    property <bool> devolviendo;
+    property <bool> autorizando-devolucion;
+    property <string> error;
+    property <int> metodo-devolucion;
+    property <string> motivo;
+
+    init => { Api.cargar-historial(Api.historial-fecha); }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            VerticalLayout {
+                Titulo { text: "Ventas y devoluciones"; }
+                Nota { text: Api.historial-resumen; }
+            }
+            Rectangle { }
+            folio := LineEdit {
+                width: 130px;
+                placeholder-text: "Buscar folio";
+                accepted(t) => { Api.buscar-folio(t); self.text = ""; }
+            }
+            Button { text: "Ir"; clicked => { Api.buscar-folio(folio.text); folio.text = ""; } }
+            Rectangle { width: 16px; }
+            fecha := LineEdit {
+                width: 120px;
+                text: Api.historial-fecha;
+                placeholder-text: "AAAA-MM-DD";
+                accepted(t) => { Api.cargar-historial(t); }
+            }
+            Button { text: "Ver día"; clicked => { Api.cargar-historial(fecha.text); } }
+            Button { text: "Hoy"; clicked => { Api.cargar-historial(""); } }
+        }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Folio"; width: 60px; }
+                    Columna { text: "Hora"; width: 70px; }
+                    Columna { text: "Cliente"; }
+                    Columna { text: "Atendió"; width: 120px; }
+                    Columna { text: "Pago"; width: 190px; }
+                    Columna { text: "Total"; width: 100px; derecha: true; }
+                }
+                if Api.historial.length == 0: Rectangle {
+                    Nota { text: "No hay ventas este día."; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                ListView {
+                    for v[i] in Api.historial: Renglon {
+                        indice: i;
+                        clicked => { Api.ver-venta(v.id); }
+                        Celda { text: v.folio; width: 60px; fuerte: true; tenue: v.estado == "cancelada"; }
+                        Celda { text: v.fecha; width: 70px; tenue: v.estado == "cancelada"; }
+                        Celda { text: v.cliente; tenue: v.estado == "cancelada"; }
+                        Celda { text: v.cajero; width: 120px; tenue: v.estado == "cancelada"; }
+                        HorizontalLayout {
+                            width: 190px;
+                            spacing: 4px;
+                            if v.estado == "cancelada": Insignia { text: "Cancelada"; tinta: Tema.peligro; fondo: Tema.peligro-suave; y: 6px; }
+                            if v.estado != "cancelada": Celda { text: v.pagos; }
+                            if v.con-devolucion: Insignia { text: "Con devolución"; tinta: Tema.aviso; fondo: Tema.aviso-suave; y: 6px; }
+                        }
+                        Celda { text: v.total; width: 100px; derecha: true; fuerte: true; tenue: v.estado == "cancelada"; }
+                    }
+                }
+            }
+        }
+    }
+
+    if Api.mostrando-detalle && !cancelando && !devolviendo: Dialogo {
+        titulo: "Venta " + Api.detalle.folio + " · " + Api.detalle.fecha;
+        ancho: 640px;
+        cerrar => { Api.cerrar-detalle(); }
+        HorizontalLayout {
+            spacing: 20px;
+            Nota { text: "Cliente: " + Api.detalle.cliente; }
+            Nota { text: "Atendió: " + Api.detalle.cajero; }
+            Nota { text: "Pago: " + Api.detalle.pagos; }
+            if Api.detalle.estado == "cancelada": Insignia { text: "Cancelada"; tinta: Tema.peligro; fondo: Tema.peligro-suave; }
+        }
+        Panel {
+            height: min(Api.detalle.partidas.length, 8) * Tema.fila + 28px;
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Producto"; }
+                    Columna { text: "Cantidad"; width: 90px; derecha: true; }
+                    Columna { text: "Devuelto"; width: 80px; derecha: true; }
+                    Columna { text: "Precio"; width: 90px; derecha: true; }
+                    Columna { text: "Importe"; width: 90px; derecha: true; }
+                }
+                ListView {
+                    for p[i] in Api.detalle.partidas: Renglon {
+                        indice: i;
+                        Celda { text: p.descripcion; }
+                        Celda { text: p.cantidad + " " + p.unidad; width: 90px; derecha: true; }
+                        Celda { text: p.devuelto; width: 80px; derecha: true; tenue: true; }
+                        Celda { text: p.precio; width: 90px; derecha: true; }
+                        Celda { text: p.importe; width: 90px; derecha: true; }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            Rectangle { }
+            VerticalLayout {
+                width: 220px;
+                if Api.detalle.descuento != "$0.00": HorizontalLayout { Nota { text: "Descuento"; } Celda { text: "−" + Api.detalle.descuento; derecha: true; } }
+                HorizontalLayout { Nota { text: "Subtotal"; } Celda { text: Api.detalle.subtotal; derecha: true; } }
+                HorizontalLayout { Nota { text: "IVA"; } Celda { text: Api.detalle.iva; derecha: true; } }
+                HorizontalLayout { Subtitulo { text: "Total"; } Celda { text: Api.detalle.total; derecha: true; fuerte: true; font-size: 16px; } }
+            }
+        }
+        if Api.detalle.devoluciones.length > 0: VerticalLayout {
+            spacing: 2px;
+            Subtitulo { text: "Devoluciones"; }
+            for d in Api.detalle.devoluciones: HorizontalLayout {
+                spacing: 8px;
+                Celda { text: d.etiqueta; }
+                Celda { text: "−" + d.valor; width: 100px; derecha: true; }
+                Button { text: "Comprobante"; clicked => { Api.imprimir-devolucion(d.id); } }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            if Api.detalle.estado == "pagada" && Api.detalle.devoluciones.length == 0: Button {
+                text: "Cancelar venta";
+                clicked => { error = ""; cancelando = true; }
+            }
+            if Api.detalle.estado == "pagada": Button {
+                text: "Devolución";
+                clicked => { error = ""; motivo = ""; metodo-devolucion = 0; Api.empezar-devolucion(); devolviendo = true; }
+            }
+            Rectangle { }
+            Button { text: "Reimprimir ticket"; primary: true; clicked => { Api.reimprimir(Api.detalle.id); } }
+        }
+    }
+
+    if cancelando: Dialogo {
+        titulo: "Cancelar la venta " + Api.detalle.folio;
+        ancho: 340px;
+        cerrar => { cancelando = false; }
+        Nota { text: "La mercancía regresa al inventario y la venta sale de los reportes. Un administrador debe autorizar."; }
+        if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+        PinPad {
+            boton: "Cancelar venta";
+            init => { self.enfocar(); }
+            enviar(pin) => {
+                self.pin = "";
+                let r = Api.cancelar-venta(Api.detalle.id, pin);
+                if r.ok { cancelando = false; } else { error = r.mensaje; }
+            }
+        }
+    }
+
+    if devolviendo && !autorizando-devolucion: Dialogo {
+        titulo: "Devolución de la venta " + Api.detalle.folio;
+        ancho: 640px;
+        cerrar => { devolviendo = false; }
+        HorizontalLayout {
+            Nota { text: "¿Qué regresa el cliente? La mercancía vuelve al inventario."; }
+            Button { text: "Devolver todo"; clicked => { Api.devolver-todo(); } }
+        }
+        Panel {
+            height: min(Api.detalle.partidas.length, 8) * 34px + 28px;
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Producto"; }
+                    Columna { text: "Compró"; width: 90px; derecha: true; }
+                    Columna { text: "Puede devolver"; width: 100px; derecha: true; }
+                    Columna { text: "Regresa"; width: 90px; derecha: true; }
+                }
+                ListView {
+                    for p[i] in Api.detalle.partidas: Renglon {
+                        indice: i;
+                        height: 34px;
+                        Celda { text: p.descripcion; }
+                        Celda { text: p.cantidad + " " + p.unidad; width: 90px; derecha: true; }
+                        Celda { text: p.pendiente; width: 100px; derecha: true; tenue: true; }
+                        LineEdit {
+                            width: 90px;
+                            text: p.a-devolver;
+                            horizontal-alignment: right;
+                            enabled: p.pendiente != "0";
+                            edited(t) => { Api.poner-devolucion(p.id, t); }
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                spacing: 3px;
+                Text { text: "Se le regresa en"; font-size: 12px; color: Tema.texto-2; }
+                ComboBox { model: ["Efectivo", "Tarjeta", "Transferencia"]; current-index <=> metodo-devolucion; }
+            }
+            Campo { etiqueta: "Motivo"; placeholder: "No le quedó, venía dañado…"; text <=> motivo; }
+        }
+        if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "Reembolso aproximado: " + Api.devolucion-estimado; font-size: 15px; font-weight: 700; vertical-alignment: center; color: Tema.texto; }
+            Rectangle { }
+            Button { text: "Cancelar"; clicked => { devolviendo = false; } }
+            Button { text: "Registrar devolución"; primary: true; clicked => { error = ""; autorizando-devolucion = true; } }
+        }
+    }
+
+    if autorizando-devolucion: Dialogo {
+        titulo: "Autorizar devolución";
+        ancho: 340px;
+        cerrar => { autorizando-devolucion = false; }
+        Nota { text: "Se regresarán " + Api.devolucion-estimado + " al cliente. Un administrador debe escribir su PIN."; }
+        if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+        PinPad {
+            boton: "Autorizar";
+            init => { self.enfocar(); }
+            enviar(pin) => {
+                self.pin = "";
+                let r = Api.devolver(metodo-devolucion, motivo, pin);
+                if r.ok {
+                    autorizando-devolucion = false;
+                    devolviendo = false;
+                } else if r.autorizar {
+                    error = r.mensaje;
+                } else {
+                    error = r.mensaje;
+                    autorizando-devolucion = false;
+                }
+            }
+        }
+    }
+}

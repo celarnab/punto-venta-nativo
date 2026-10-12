@@ -1,0 +1,340 @@
+// Lo que la interfaz muestra y lo que puede pedir. Rust llena las propiedades y atiende los callbacks;
+// los montos y cantidades viajan como texto ya formateado («$1,234.50», «0.75 kg»).
+
+export struct UsuarioUi {
+    id: int,
+    nombre: string,
+    rol: string,
+    admin: bool,
+    activo: bool,
+}
+
+export struct PrecioUi {
+    id: int,            // 0 = el precio normal
+    nombre: string,
+    precio: string,
+    desde: string,      // «desde 10» para mayoreo; vacío si se elige a mano
+}
+
+export struct ProductoUi {
+    id: int,
+    codigo: string,
+    nombre: string,
+    familia: string,
+    precio: string,
+    precio-numero: float,
+    costo: string,
+    existencia: string,
+    unidad: string,
+    granel: bool,
+    activo: bool,
+    alerta: bool,
+    otros-precios: int,
+}
+
+export struct PartidaUi {
+    id: int,
+    codigo: string,
+    descripcion: string,
+    cantidad: string,   // como se edita: «2», «0.75»
+    unidad: string,
+    precio: string,
+    importe: string,
+    fijo: bool,
+    bajo-costo: bool,
+    devuelto: string,
+    pendiente: string,  // lo que aún se puede devolver
+    a-devolver: string, // lo que se está capturando en una devolución
+}
+
+export struct FilaUi {
+    id: int,
+    etiqueta: string,
+    valor: string,
+    proporcion: float,  // 0..1, para barras
+}
+
+export struct VentaUi {
+    id: int,
+    folio: string,
+    estado: string,
+    cliente: string,
+    cajero: string,
+    nota: string,
+    fecha: string,
+    descuento: string,
+    subtotal: string,
+    iva: string,
+    total: string,
+    articulos: string,
+    partidas: [PartidaUi],
+    pagos: string,
+    vigencia: string,
+    vencida: bool,
+    con-devolucion: bool,
+    devoluciones: [FilaUi],
+}
+
+export struct ClienteUi {
+    id: int,
+    nombre: string,
+    telefono: string,
+    correo: string,
+    rfc: string,
+    notas: string,
+}
+
+export struct FamiliaUi {
+    id: int,
+    nombre: string,
+    alerta: string,
+}
+
+export struct EditorProductoUi {
+    id: int,            // 0 = nuevo
+    codigo: string,
+    nombre: string,
+    familia-indice: int, // en `familias-nombres`; 0 = sin familia
+    granel: bool,
+    unidad: string,
+    precio: string,
+    costo: string,
+    stock-minimo: string,
+    stock-maximo: string,
+    alerta: string,
+    activo: bool,
+    existencia: string,
+    precios: [PrecioUi],
+}
+
+export struct MovimientoUi {
+    fecha: string,
+    tipo: string,
+    cantidad: string,
+    referencia: string,
+}
+
+export struct CorteUi {
+    abierta: bool,
+    id: int,
+    abrio: string,
+    cerro: string,
+    desde: string,
+    hasta: string,
+    fondo: string,
+    ventas: string,
+    total: string,
+    por-metodo: [FilaUi],
+    por-cajero: [FilaUi],
+    devoluciones: [FilaUi],
+    esperado: string,
+    contado: string,
+    diferencia-etiqueta: string,
+    diferencia: string,
+}
+
+export struct ImportacionUi {
+    numero: string,
+    codigo: string,
+    nombre: string,
+    accion: string,     // «Nuevo», «Cambia», «Igual», «Error»
+    detalle: string,
+}
+
+export struct ApartadoUi {
+    titulo: string,
+    filas: [FilaUi],
+}
+
+export struct ReporteUi {
+    periodo: string,
+    ventas: string,
+    vendido: string,
+    devoluciones: string,
+    total: string,
+    promedio: string,
+    utilidad: string,
+    margen: string,
+    apartados: [ApartadoUi],
+}
+
+export struct NegocioUi {
+    nombre: string,
+    direccion: string,
+    telefono: string,
+    rfc: string,
+    iva: string,
+    pie: string,
+}
+
+export struct ImpresoraUi {
+    nombre: string,     // vacío = sin impresora térmica: los tickets salen en PDF
+    columnas: int,
+    abrir-cajon: bool,
+    automatico: bool,   // imprimir el ticket al cobrar sin preguntar
+}
+
+/// Respuesta de una acción que puede pedir el PIN de un administrador.
+export struct RespuestaUi {
+    ok: bool,
+    autorizar: bool,    // falta (o estuvo mal) el PIN de un administrador
+    mensaje: string,
+}
+
+export struct CobroUi {
+    metodo: int,        // 0 efectivo, 1 tarjeta, 2 transferencia
+    monto: string,
+}
+
+export global Api {
+    // — Sesión —
+    in property <bool> hay-usuarios: true;
+    in property <bool> hay-sesion;
+    in property <bool> es-admin;
+    in property <string> usuario;
+    in property <string> negocio-nombre;
+    in property <string> fecha-larga;
+    in property <[UsuarioUi]> usuarios-login;
+    in-out property <string> pantalla: "venta";
+    pure callback pesos(float) -> string;          // 1234.5 → «$1,234.50»
+    callback configurar(string, string, string) -> string;  // negocio, nombre, pin → error
+    callback entrar(int, string) -> bool;
+    callback salir();
+    callback cambiar-mi-pin(string) -> string;
+
+    // — Avisos —
+    in property <string> aviso;
+    in property <bool> aviso-error;
+
+    // — Venta —
+    in property <bool> caja-abierta: true;
+    in property <VentaUi> venta;
+    in property <[ProductoUi]> resultados;
+    in-out property <int> resaltado;
+    in property <bool> pide-precio;
+    in property <bool> pide-peso;
+    in property <ProductoUi> producto-pendiente;
+    in property <[PrecioUi]> opciones-precio;
+    in property <bool> mostrando-cobrada;
+    in property <VentaUi> cobrada;
+    in property <string> cambio;
+    in property <[ClienteUi]> clientes;
+    callback abrir-caja(string) -> string;
+    callback buscar(string);
+    callback confirmar-busqueda(string) -> bool;    // Enter: código del escáner o resultado resaltado
+    callback elegir-resultado(int, string) -> bool;  // índice, texto buscado (para «3*»)
+    callback elegir-precio(int);           // id del precio; 0 = normal
+    callback agregar-peso(string);
+    callback cancelar-pendiente();
+    callback cambiar-cantidad(int, string);
+    callback sumar(int, int);              // partida, ±1
+    callback quitar(int);
+    callback cambiar-precio(int);          // partida: vuelve a preguntar el precio
+    callback aplicar-descuento(string);
+    callback buscar-clientes(string);
+    callback asignar-cliente(int);         // 0 = público general
+    callback crear-cliente-rapido(string, string);
+    callback pausar(string) -> bool;
+    callback tirar();
+    callback cotizar(string, string) -> bool; // días, nota
+    callback cobrar([CobroUi], string) -> RespuestaUi; // cobros, pin de quien autoriza vender bajo costo
+    callback imprimir-cobrada();
+    callback cerrar-cobrada();
+
+    // — En pausa —
+    in property <[VentaUi]> pausadas;
+    callback cargar-pausadas();
+    callback retomar(int);
+    callback descartar(int);
+
+    // — Historial y devoluciones —
+    in property <[VentaUi]> historial;
+    in property <string> historial-resumen;
+    in-out property <string> historial-fecha;
+    in property <VentaUi> detalle;
+    in property <bool> mostrando-detalle;
+    callback cargar-historial(string);
+    callback buscar-folio(string);
+    callback ver-venta(int);
+    callback cerrar-detalle();
+    callback reimprimir(int);
+    callback cancelar-venta(int, string) -> RespuestaUi;
+    in property <string> devolucion-estimado;
+    callback empezar-devolucion();
+    callback poner-devolucion(int, string);  // partida, cantidad
+    callback devolver-todo();
+    callback devolver(int, string, string) -> RespuestaUi; // método, motivo, pin
+    callback imprimir-devolucion(int);
+
+    // — Cotizaciones —
+    in property <[VentaUi]> cotizaciones;
+    callback cargar-cotizaciones(string);
+    callback ver-cotizacion(int);
+    callback convertir-cotizacion(int);
+    callback borrar-cotizacion(int);
+    callback cotizacion-ticket(int);
+    callback cotizacion-pdf(int);
+    callback cotizacion-excel(int);
+
+    // — Caja —
+    in property <CorteUi> corte;
+    in property <[CorteUi]> cortes;
+    callback cargar-caja();
+    callback cerrar-caja(string) -> string;
+    callback imprimir-corte(int);
+
+    // — Productos —
+    in property <[ProductoUi]> productos;
+    in property <[FamiliaUi]> familias;
+    in property <[string]> familias-nombres; // «Sin familia» primero
+    in property <EditorProductoUi> editor;
+    in property <bool> editando;
+    in property <[MovimientoUi]> movimientos;
+    in property <[ImportacionUi]> importacion;
+    in property <string> importacion-resumen;
+    in property <bool> importando;
+    callback buscar-productos(string, bool, bool); // texto, inactivos, solo por surtir
+    callback editar-producto(int);         // 0 = nuevo
+    callback guardar-producto(EditorProductoUi) -> string; // los otros precios se toman de lo capturado abajo
+    callback agregar-otro-precio();
+    callback quitar-otro-precio(int);
+    callback editar-otro-precio(int, int, string); // renglón, campo (0 nombre, 1 precio, 2 desde), valor
+    callback cerrar-editor();
+    callback borrar-producto(int) -> string;
+    callback crear-familia(string, string) -> int;    // nombre, aviso → su índice en `familias-nombres` (-1 si falló)
+    callback renombrar-familia(int, string, string) -> string;
+    callback borrar-familia(int);
+    callback registrar-entrada(int, string, string) -> string;
+    callback ajustar-existencia(int, string, string) -> string;
+    callback elegir-importacion();
+    callback confirmar-importacion();
+    callback cerrar-importacion();
+    callback exportar-productos();
+
+    // — Clientes —
+    in property <[ClienteUi]> lista-clientes;
+    callback buscar-lista-clientes(string);
+    callback guardar-cliente(ClienteUi) -> string;
+
+    // — Reportes —
+    in property <ReporteUi> reporte;
+    in property <[string]> cajeros-filtro; // «Todos» primero
+    callback cargar-reporte(int, string, string, int); // periodo, desde, hasta, cajero
+    callback exportar-reporte();
+
+    // — Ajustes —
+    in property <NegocioUi> negocio;
+    in property <[UsuarioUi]> usuarios;
+    in property <[string]> impresoras;     // «Sin impresora térmica (PDF)» primero
+    in property <int> impresora-indice;
+    in property <ImpresoraUi> impresora;
+    in property <string> carpeta-datos;
+    callback cargar-ajustes();
+    callback guardar-negocio(NegocioUi) -> string;
+    callback guardar-usuario(int, string, bool, bool, string) -> string; // id (0 nuevo), nombre, admin, activo, pin
+    callback guardar-impresora(ImpresoraUi);
+    callback probar-impresora();
+    callback respaldar();
+    callback restaurar() -> string;
+    callback abrir-carpeta-datos();
+}

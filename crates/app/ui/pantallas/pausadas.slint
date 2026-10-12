@@ -1,0 +1,51 @@
+// Ventas en pausa: cuándo se pausaron, de quién y cuánto llevan.
+
+import { Button, ListView } from "std-widgets.slint";
+import { Api } from "../api.slint";
+import { Tema, Panel, Titulo, Nota, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+
+export component Pausadas inherits Rectangle {
+    init => { Api.cargar-pausadas(); }
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        Titulo { text: "Ventas en pausa"; }
+        Nota { text: "Al retomar una, lo que tengas en «Vender» queda en pausa."; }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Pausada"; width: 150px; }
+                    Columna { text: "Nota"; }
+                    Columna { text: "Cliente"; width: 180px; }
+                    Columna { text: "Atendió"; width: 110px; }
+                    Columna { text: "Artículos"; width: 70px; derecha: true; }
+                    Columna { text: "Total"; width: 100px; derecha: true; }
+                    Rectangle { width: 170px; }
+                }
+                if Api.pausadas.length == 0: Rectangle {
+                    Nota { text: "No hay ventas en pausa."; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                ListView {
+                    for v[i] in Api.pausadas: Renglon {
+                        indice: i;
+                        height: 36px;
+                        Celda { text: v.fecha; width: 150px; }
+                        Celda { text: v.nota != "" ? v.nota : "(sin nota)"; tenue: v.nota == ""; }
+                        Celda { text: v.cliente; width: 180px; }
+                        Celda { text: v.cajero; width: 110px; }
+                        Celda { text: v.articulos; width: 70px; derecha: true; }
+                        Celda { text: v.total; width: 100px; derecha: true; fuerte: true; }
+                        HorizontalLayout {
+                            width: 170px;
+                            spacing: 4px;
+                            padding-top: 3px;
+                            padding-bottom: 3px;
+                            Button { text: "Retomar"; primary: true; clicked => { Api.retomar(v.id); } }
+                            Button { text: "Tirar"; clicked => { Api.descartar(v.id); } }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

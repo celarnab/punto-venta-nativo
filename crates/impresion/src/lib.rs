@@ -6,4 +6,4 @@ pub mod escpos;
 pub mod pdf;
 pub mod sistema;
 
-pub use documento::{Documento, corte, devolucion, ticket};
+pub use documento::{Documento, corte, devolucion, prueba, ticket};

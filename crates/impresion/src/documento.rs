@@ -262,6 +262,21 @@ pub(crate) fn precio_por(partida: &nucleo::ventas::Partida) -> String {
     }
 }
 
+/// Para revisar que la impresora y el ancho del papel están bien configurados.
+pub fn prueba(negocio: &Negocio, columnas: usize) -> Documento {
+    let mut doc = Documento::default();
+    doc.encabezado(negocio);
+    doc.con_estilo("PRUEBA DE IMPRESIÓN", TITULO);
+    doc.texto(format!("{columnas} letras por renglón:"));
+    doc.texto("1234567890".repeat(columnas.div_ceil(10)).chars().take(columnas).collect::<String>());
+    doc.texto("Acentos: á é í ó ú ñ Ñ ¿? ¡!");
+    doc.par("Total", "$1,234.50");
+    doc.par_con_estilo("TOTAL", "$99.00", TOTAL);
+    doc.espacio();
+    doc.con_estilo("Si todo se ve bien, la impresora está lista.", CENTRADO);
+    doc
+}
+
 fn con_prefijo(prefijo: &str, dato: &str) -> String {
     if dato.is_empty() { String::new() } else { format!("{prefijo}{dato}") }
 }

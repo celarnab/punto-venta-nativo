@@ -1,0 +1,351 @@
+// Catálogo: buscar, dar de alta, editar, borrar, familias, existencias e importación de Excel.
+
+import { Button, LineEdit, ListView, CheckBox, ComboBox } from "std-widgets.slint";
+import { Api, EditorProductoUi } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+
+component EditorProducto inherits Dialogo {
+    titulo: Api.editor.id == 0 ? "Nuevo producto" : Api.editor.nombre;
+    ancho: 900px;
+    property <int> familia: Api.editor.familia-indice;
+    property <bool> granel: Api.editor.granel;
+    property <bool> activo: Api.editor.activo;
+    property <bool> nueva-familia;
+    property <string> error;
+    property <bool> confirmando-borrado;
+
+    HorizontalLayout {
+        spacing: 16px;
+        // Columna izquierda: datos del producto.
+        VerticalLayout {
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 10px;
+                codigo := Campo { etiqueta: "Código / código de barras"; text: Api.editor.codigo; width: 190px; init => { if Api.editor.id == 0 { self.enfocar(); } } }
+                nombre := Campo { etiqueta: "Nombre"; text: Api.editor.nombre; }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                VerticalLayout {
+                    spacing: 3px;
+                    Text { text: "Familia"; font-size: 12px; color: Tema.texto-2; }
+                    HorizontalLayout {
+                        spacing: 4px;
+                        ComboBox { model: Api.familias-nombres; current-index <=> familia; }
+                        Button { text: "+ Nueva"; clicked => { nueva-familia = !nueva-familia; } }
+                    }
+                    if nueva-familia: HorizontalLayout {
+                        spacing: 4px;
+                        nombre-familia := LineEdit { placeholder-text: "Nombre de la familia"; }
+                        Button {
+                            text: "Crear";
+                            enabled: nombre-familia.text != "";
+                            clicked => {
+                                let indice = Api.crear-familia(nombre-familia.text, "");
+                                if indice >= 0 {
+                                    familia = indice;
+                                    nueva-familia = false;
+                                }
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    spacing: 6px;
+                    Text { text: "Se vende"; font-size: 12px; color: Tema.texto-2; }
+                    CheckBox { text: "A granel, por kilo"; checked <=> granel; }
+                    CheckBox { text: "Activo (se puede vender)"; checked <=> activo; }
+                }
+                unidad := Campo {
+                    etiqueta: "Unidad";
+                    width: 90px;
+                    text: granel ? "kg" : Api.editor.unidad;
+                    habilitado: !granel;
+                    ayuda: granel ? "" : "pza, m, caja…";
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                precio := Campo { etiqueta: granel ? "Precio por kg (IVA incluido)" : "Precio (IVA incluido)"; numero: true; text: Api.editor.precio; }
+                costo := Campo { etiqueta: granel ? "Costo por kg" : "Costo"; numero: true; text: Api.editor.costo; ayuda: "No se vende por debajo sin autorización."; }
+                VerticalLayout {
+                    spacing: 3px;
+                    Text { text: "Margen"; font-size: 12px; color: Tema.texto-2; }
+                    Text {
+                        text: precio.text.to-float() > 0 ? round((precio.text.to-float() - costo.text.to-float()) / precio.text.to-float() * 1000) / 10 + " %" : "—";
+                        font-size: 16px;
+                        font-weight: 700;
+                        color: precio.text.to-float() >= costo.text.to-float() ? Tema.exito : Tema.peligro;
+                    }
+                }
+            }
+            Subtitulo { text: "Otros precios"; }
+            Nota { text: "Con «desde» se aplican solos al llevar esa cantidad (mayoreo). Si el producto tiene otros precios, al venderlo se pregunta cuál."; }
+            for pr[i] in Api.editor.precios: HorizontalLayout {
+                spacing: 6px;
+                LineEdit { text: pr.nombre; placeholder-text: "Mayoreo, Contratista…"; edited(t) => { Api.editar-otro-precio(i, 0, t); } }
+                LineEdit { text: pr.precio; width: 100px; placeholder-text: "Precio"; horizontal-alignment: right; edited(t) => { Api.editar-otro-precio(i, 1, t); } }
+                LineEdit { text: pr.desde; width: 110px; placeholder-text: "Desde (opcional)"; horizontal-alignment: right; edited(t) => { Api.editar-otro-precio(i, 2, t); } }
+                Button { text: "✕"; width: 32px; clicked => { Api.quitar-otro-precio(i); } }
+            }
+            HorizontalLayout {
+                Button { text: "+ Agregar precio"; clicked => { Api.agregar-otro-precio(); } }
+                Rectangle { }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                minimo := Campo { etiqueta: "Stock mínimo"; numero: true; text: Api.editor.stock-minimo; }
+                maximo := Campo { etiqueta: "Stock máximo"; numero: true; text: Api.editor.stock-maximo; }
+                alerta := Campo { etiqueta: "Avisar con existencia de"; numero: true; text: Api.editor.alerta; placeholder: "El de la familia"; }
+            }
+        }
+        // Columna derecha: existencias (solo productos ya guardados).
+        if Api.editor.id != 0: VerticalLayout {
+            width: 250px;
+            spacing: 8px;
+            Subtitulo { text: "Existencia: " + Api.editor.existencia + " " + (granel ? "kg" : Api.editor.unidad); }
+            entrada := Campo { etiqueta: "Llegó mercancía (cantidad)"; numero: true; }
+            referencia := Campo { etiqueta: "Factura / proveedor"; }
+            Button {
+                text: "Registrar entrada";
+                enabled: entrada.text != "";
+                clicked => {
+                    error = Api.registrar-entrada(Api.editor.id, entrada.text, referencia.text);
+                    if error == "" { entrada.text = ""; referencia.text = ""; }
+                }
+            }
+            contada := Campo { etiqueta: "Conteo físico: hay realmente"; numero: true; }
+            Button {
+                text: "Ajustar existencia";
+                enabled: contada.text != "";
+                clicked => {
+                    error = Api.ajustar-existencia(Api.editor.id, contada.text, "Conteo físico");
+                    if error == "" { contada.text = ""; }
+                }
+            }
+            Text { text: "Últimos movimientos"; font-size: 12px; color: Tema.texto-2; font-weight: 700; }
+            Panel {
+                ListView {
+                    for m[i] in Api.movimientos: Renglon {
+                        indice: i;
+                        height: 24px;
+                        Celda { text: m.fecha; font-size: 11px; width: 70px; }
+                        Celda { text: m.tipo; font-size: 11px; }
+                        Celda { text: m.cantidad; font-size: 11px; derecha: true; width: 50px; }
+                    }
+                }
+            }
+        }
+    }
+    if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+    HorizontalLayout {
+        spacing: 8px;
+        if Api.editor.id != 0 && !confirmando-borrado: Button { text: "Borrar producto"; clicked => { confirmando-borrado = true; } }
+        if confirmando-borrado: Text { text: "¿Seguro? Se conserva en el historial."; color: Tema.peligro; vertical-alignment: center; }
+        if confirmando-borrado: Button {
+            text: "Sí, borrar";
+            clicked => {
+                error = Api.borrar-producto(Api.editor.id);
+                if error == "" { root.cerrar(); }
+            }
+        }
+        if confirmando-borrado: Button { text: "No"; clicked => { confirmando-borrado = false; } }
+        Rectangle { }
+        Button { text: "Cancelar"; clicked => { root.cerrar(); } }
+        Button {
+            text: "Guardar";
+            primary: true;
+            clicked => {
+                error = Api.guardar-producto({
+                    id: Api.editor.id,
+                    codigo: codigo.text,
+                    nombre: nombre.text,
+                    familia-indice: familia,
+                    granel: granel,
+                    unidad: unidad.text,
+                    precio: precio.text,
+                    costo: costo.text,
+                    stock-minimo: minimo.text,
+                    stock-maximo: maximo.text,
+                    alerta: alerta.text,
+                    activo: activo,
+                });
+                if error == "" { root.cerrar(); }
+            }
+        }
+    }
+}
+
+component Familias inherits Dialogo {
+    titulo: "Familias de productos";
+    ancho: 520px;
+    property <string> error;
+    Nota { text: "Agrupan productos para los reportes. El aviso de existencia aplica a los productos que no tengan el suyo."; }
+    Panel {
+        height: 280px;
+        VerticalLayout {
+            Cabecera {
+                Columna { text: "Nombre"; }
+                Columna { text: "Avisar con"; width: 90px; }
+                Rectangle { width: 150px; }
+            }
+            ListView {
+                for f[i] in Api.familias: Renglon {
+                    indice: i;
+                    height: 34px;
+                    nombre := LineEdit { text: f.nombre; }
+                    alerta := LineEdit { text: f.alerta; width: 90px; placeholder-text: "Sin aviso"; horizontal-alignment: right; }
+                    HorizontalLayout {
+                        width: 150px;
+                        spacing: 4px;
+                        Button { text: "Guardar"; clicked => { error = Api.renombrar-familia(f.id, nombre.text, alerta.text); } }
+                        Button { text: "Borrar"; clicked => { Api.borrar-familia(f.id); } }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        spacing: 6px;
+        nueva := LineEdit { placeholder-text: "Nueva familia"; }
+        nueva-alerta := LineEdit { placeholder-text: "Avisar con"; width: 90px; horizontal-alignment: right; }
+        Button {
+            text: "Agregar";
+            enabled: nueva.text != "";
+            clicked => {
+                if Api.crear-familia(nueva.text, nueva-alerta.text) >= 0 {
+                    nueva.text = "";
+                    nueva-alerta.text = "";
+                }
+            }
+        }
+    }
+    if error != "": Text { text: error; color: Tema.peligro; }
+}
+
+export component Productos inherits Rectangle {
+    property <bool> inactivos;
+    property <bool> por-surtir;
+    property <bool> viendo-familias;
+    init => { Api.buscar-productos("", false, false); }
+
+    function buscar() {
+        Api.buscar-productos(consulta.text, inactivos, por-surtir);
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            Titulo { text: "Productos"; vertical-alignment: center; }
+            Rectangle { }
+            if Api.es-admin: Button { text: "Familias"; clicked => { viendo-familias = true; } }
+            if Api.es-admin: Button { text: "Importar Excel"; clicked => { Api.elegir-importacion(); } }
+            if Api.es-admin: Button { text: "Exportar Excel"; clicked => { Api.exportar-productos(); } }
+            if Api.es-admin: Button { text: "Nuevo producto"; primary: true; clicked => { Api.editar-producto(0); } }
+        }
+        HorizontalLayout {
+            spacing: 14px;
+            consulta := LineEdit {
+                width: 380px;
+                placeholder-text: "Buscar por código, nombre o familia";
+                edited => { buscar(); }
+            }
+            CheckBox { text: "Solo por surtir"; checked <=> por-surtir; toggled => { buscar(); } }
+            CheckBox { text: "Incluir desactivados"; checked <=> inactivos; toggled => { buscar(); } }
+            Rectangle { }
+        }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Código"; width: 130px; }
+                    Columna { text: "Nombre"; }
+                    Columna { text: "Familia"; width: 130px; }
+                    Columna { text: "Se vende"; width: 90px; }
+                    Columna { text: "Precio"; width: 95px; derecha: true; }
+                    if Api.es-admin: Columna { text: "Costo"; width: 90px; derecha: true; }
+                    Columna { text: "Existencia"; width: 110px; derecha: true; }
+                }
+                if Api.productos.length == 0: Rectangle {
+                    Nota { text: por-surtir ? "Nada por surtir." : "No hay productos que coincidan."; horizontal-alignment: center; vertical-alignment: center; }
+                }
+                ListView {
+                    for p[i] in Api.productos: Renglon {
+                        indice: i;
+                        clicked => { if Api.es-admin { Api.editar-producto(p.id); } }
+                        Celda { text: p.codigo; width: 130px; tenue: true; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Celda { text: p.nombre; tenue: !p.activo; }
+                            if p.otros-precios > 0: Insignia { text: (p.otros-precios + 1) + " precios"; y: 6px; }
+                            if !p.activo: Insignia { text: "desactivado"; y: 6px; }
+                        }
+                        Celda { text: p.familia; width: 130px; }
+                        Celda { text: p.granel ? "a granel (kg)" : "por " + p.unidad; width: 90px; tenue: true; }
+                        Celda { text: p.precio + (p.granel ? "/kg" : ""); width: 95px; derecha: true; }
+                        if Api.es-admin: Celda { text: p.costo; width: 90px; derecha: true; tenue: true; }
+                        HorizontalLayout {
+                            width: 110px;
+                            alignment: end;
+                            spacing: 4px;
+                            if p.alerta: Insignia { text: "surtir"; tinta: Tema.aviso; fondo: Tema.aviso-suave; y: 6px; }
+                            Celda { text: p.existencia + " " + p.unidad; derecha: true; }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if Api.editando: EditorProducto {
+        cerrar => { Api.cerrar-editor(); buscar(); }
+    }
+
+    if Api.importando: Dialogo {
+        titulo: "Importar productos desde Excel";
+        ancho: 820px;
+        cerrar => { Api.cerrar-importacion(); }
+        Nota { text: Api.importacion-resumen; }
+        Panel {
+            height: 340px;
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Fila"; width: 40px; derecha: true; }
+                    Columna { text: "Código"; width: 120px; }
+                    Columna { text: "Nombre"; width: 220px; }
+                    Columna { text: "Qué pasará"; }
+                }
+                ListView {
+                    for f[i] in Api.importacion: Renglon {
+                        indice: i;
+                        Celda { text: f.numero; width: 40px; derecha: true; tenue: true; }
+                        Celda { text: f.codigo; width: 120px; }
+                        Celda { text: f.nombre; width: 220px; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Insignia {
+                                y: 6px;
+                                text: f.accion;
+                                tinta: f.accion == "Error" ? Tema.peligro : f.accion == "Nuevo" ? Tema.exito : f.accion == "Cambia" ? Tema.acento : Tema.texto-2;
+                                fondo: f.accion == "Error" ? Tema.peligro-suave : f.accion == "Nuevo" ? Tema.exito-suave : f.accion == "Cambia" ? Tema.acento-suave : Tema.panel-2;
+                            }
+                            Celda { text: f.detalle; tenue: f.accion != "Error"; color: f.accion == "Error" ? Tema.peligro : Tema.texto-2; }
+                        }
+                    }
+                }
+            }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Button { text: "Elegir otro archivo"; clicked => { Api.elegir-importacion(); } }
+            Rectangle { }
+            Button { text: "Cancelar"; clicked => { Api.cerrar-importacion(); } }
+            Button { text: "Importar"; primary: true; clicked => { Api.confirmar-importacion(); buscar(); } }
+        }
+    }
+
+    if viendo-familias: Familias {
+        cerrar => { viendo-familias = false; buscar(); }
+    }
+}

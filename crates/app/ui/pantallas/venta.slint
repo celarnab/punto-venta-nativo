@@ -1,0 +1,420 @@
+// Vender, pensado para el escáner y el teclado:
+//   escribir o escanear + Enter agrega · «3*martillo» agrega 3 · «0.5*clavo» medio kilo · ↑↓ eligen
+//   F2 buscar · F4 pausar · F6 cotizar · F12 cobrar
+
+import { Button, LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { Api, PartidaUi } from "../api.slint";
+import { Tema, Panel, Titulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+import { Cobro } from "cobro.slint";
+
+component Total inherits HorizontalLayout {
+    in property <string> etiqueta;
+    in property <string> valor;
+    in property <bool> fuerte;
+    Text { text: etiqueta; color: Tema.texto-2; font-size: fuerte ? 15px : 13px; vertical-alignment: center; }
+    Text {
+        text: valor;
+        color: Tema.texto;
+        font-size: fuerte ? 30px : 14px;
+        font-weight: fuerte ? 700 : 400;
+        horizontal-alignment: right;
+        vertical-alignment: center;
+    }
+}
+
+export component Venta inherits Rectangle {
+    property <bool> cobrando;
+    property <bool> pausando;
+    property <bool> cotizando;
+    property <bool> eligiendo-cliente;
+    property <bool> vacia: Api.venta.partidas.length == 0;
+    property <bool> hay-dialogo: cobrando || pausando || cotizando || eligiendo-cliente || Api.pide-precio || Api.pide-peso
+        || Api.mostrando-cobrada || !Api.caja-abierta;
+
+    public function enfocar() {
+        buscador.focus();
+    }
+
+    function confirmar() {
+        if Api.confirmar-busqueda(buscador.text) {
+            buscador.text = "";
+        }
+    }
+
+    init => { enfocar(); }
+
+    atajos := FocusScope {
+        key-pressed(e) => {
+            if hay-dialogo { return reject; }
+            if e.text == Key.F2 { enfocar(); return accept; }
+            if e.text == Key.F4 && !vacia { pausando = true; return accept; }
+            if e.text == Key.F6 && !vacia { cotizando = true; return accept; }
+            if e.text == Key.F12 && !vacia { cobrando = true; return accept; }
+            reject
+        }
+
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 10px;
+
+            // — Izquierda: búsqueda y partidas —
+            VerticalLayout {
+                spacing: 8px;
+                HorizontalLayout {
+                    spacing: 8px;
+                    buscador := LineEdit {
+                        placeholder-text: "Escanea o escribe código o nombre  (F2)    3*martillo agrega 3 · 0.5*clavo medio kilo";
+                        font-size: 16px;
+                        height: 38px;
+                        edited(t) => { Api.buscar(t); }
+                        accepted => { confirmar(); }
+                        key-pressed(e) => {
+                            if e.text == Key.DownArrow && Api.resultados.length > 0 {
+                                Api.resaltado = Math.mod(Api.resaltado + 1, Api.resultados.length);
+                                return accept;
+                            }
+                            if e.text == Key.UpArrow && Api.resultados.length > 0 {
+                                Api.resaltado = Math.mod(Api.resaltado - 1 + Api.resultados.length, Api.resultados.length);
+                                return accept;
+                            }
+                            if e.text == Key.Escape {
+                                self.text = "";
+                                Api.buscar("");
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+                    Button { text: "Agregar"; clicked => { confirmar(); } }
+                }
+
+                Panel {
+                    VerticalLayout {
+                        Cabecera {
+                            Columna { text: "Código"; width: 120px; }
+                            Columna { text: "Producto"; }
+                            Columna { text: "Cantidad"; width: 150px; derecha: true; }
+                            Columna { text: "Precio"; width: 110px; derecha: true; }
+                            Columna { text: "Importe"; width: 100px; derecha: true; }
+                            Rectangle { width: 26px; }
+                        }
+                        if vacia: Rectangle {
+                            Nota {
+                                text: "Escanea un producto o búscalo por nombre para empezar.";
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                        if !vacia: ListView {
+                            for p[i] in Api.venta.partidas: Renglon {
+                                indice: i;
+                                height: 36px;
+                                Celda { text: p.codigo; width: 120px; tenue: true; }
+                                Celda { text: p.descripcion; }
+                                HorizontalLayout {
+                                    width: 150px;
+                                    spacing: 2px;
+                                    alignment: end;
+                                    Button { text: "−"; width: 28px; clicked => { Api.sumar(p.id, -1); } }
+                                    LineEdit {
+                                        width: 64px;
+                                        text: p.cantidad;
+                                        horizontal-alignment: right;
+                                        accepted(t) => { Api.cambiar-cantidad(p.id, t); enfocar(); }
+                                    }
+                                    Button { text: "+"; width: 28px; clicked => { Api.sumar(p.id, 1); } }
+                                    Celda { text: p.unidad; width: 24px; tenue: true; }
+                                }
+                                Rectangle {
+                                    width: 110px;
+                                    HorizontalLayout {
+                                        alignment: end;
+                                        spacing: 4px;
+                                        if p.bajo-costo: Insignia { text: "bajo costo"; tinta: Tema.peligro; fondo: Tema.peligro-suave; y: 9px; }
+                                        if p.fijo: Insignia { text: "elegido"; tinta: Tema.acento; fondo: Tema.acento-suave; y: 9px; }
+                                        Celda { text: p.precio; derecha: true; }
+                                    }
+                                    TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => { Api.cambiar-precio(p.id); }
+                                    }
+                                }
+                                Celda { text: p.importe; width: 100px; derecha: true; fuerte: true; }
+                                Rectangle {
+                                    width: 26px;
+                                    Text { text: "✕"; color: quitar.has-hover ? Tema.peligro : Tema.texto-3; font-size: 14px; }
+                                    quitar := TouchArea { clicked => { Api.quitar(p.id); enfocar(); } }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // — Derecha: cliente, totales y acciones —
+            Panel {
+                width: 300px;
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        VerticalLayout {
+                            Nota { text: "Cliente"; }
+                            Text { text: Api.venta.cliente; font-weight: 700; color: Tema.texto; wrap: word-wrap; }
+                        }
+                        Button { text: "Cambiar"; clicked => { eligiendo-cliente = true; Api.buscar-clientes(""); } }
+                    }
+                    if Api.venta.nota != "": Rectangle {
+                        background: Tema.aviso-suave;
+                        height: texto-nota.preferred-height + 10px;
+                        texto-nota := Text { text: Api.venta.nota; color: Tema.aviso; wrap: word-wrap; width: parent.width - 12px; }
+                    }
+                    Rectangle { height: 1px; background: Tema.borde; }
+                    Total { etiqueta: "Artículos"; valor: Api.venta.articulos; }
+                    Total { etiqueta: "Subtotal"; valor: Api.venta.subtotal; }
+                    Total { etiqueta: "IVA"; valor: Api.venta.iva; }
+                    HorizontalLayout {
+                        Text { text: "Descuento $"; color: Tema.texto-2; vertical-alignment: center; }
+                        LineEdit {
+                            width: 110px;
+                            text: Api.venta.descuento;
+                            horizontal-alignment: right;
+                            enabled: !vacia;
+                            accepted(t) => { Api.aplicar-descuento(t); enfocar(); }
+                        }
+                    }
+                    Rectangle { }
+                    Rectangle { height: 1px; background: Tema.borde; }
+                    Total { etiqueta: "TOTAL"; valor: Api.venta.total; fuerte: true; }
+                    Button {
+                        text: "Cobrar  (F12)";
+                        primary: true;
+                        height: 46px;
+                        enabled: !vacia;
+                        clicked => { cobrando = true; }
+                    }
+                    HorizontalLayout {
+                        spacing: 6px;
+                        Button { text: "Pausar (F4)"; enabled: !vacia; clicked => { pausando = true; } }
+                        Button { text: "Cotizar (F6)"; enabled: !vacia; clicked => { cotizando = true; } }
+                    }
+                    Button {
+                        text: "Tirar la venta";
+                        enabled: !vacia;
+                        clicked => { Api.tirar(); enfocar(); }
+                    }
+                }
+            }
+        }
+
+        // Resultados de la búsqueda, encima de las partidas.
+        if Api.resultados.length > 0 && !hay-dialogo: Panel {
+            x: 10px;
+            y: 52px;
+            width: root.width - 330px;
+            height: min(Api.resultados.length, 8) * 34px + 2px;
+            drop-shadow-blur: 8px;
+            drop-shadow-color: #00000033;
+            VerticalLayout {
+                padding: 1px;
+                for r[i] in Api.resultados: Renglon {
+                    indice: i;
+                    height: 34px;
+                    seleccionado: i == Api.resaltado;
+                    clicked => {
+                        if Api.elegir-resultado(i, buscador.text) { buscador.text = ""; }
+                    }
+                    Celda { text: r.codigo; width: 120px; tenue: true; }
+                    Celda { text: r.nombre; }
+                    if r.granel: Insignia { text: "a granel"; tinta: Tema.acento; fondo: Tema.acento-suave; y: 8px; }
+                    if r.otros-precios > 0: Insignia { text: (r.otros-precios + 1) + " precios"; y: 8px; }
+                    Celda { text: r.existencia + " " + r.unidad; width: 110px; derecha: true; tenue: !r.alerta; }
+                    Celda { text: r.precio + (r.granel ? "/kg" : ""); width: 100px; derecha: true; fuerte: true; }
+                }
+            }
+        }
+    }
+
+    // — Diálogos —
+
+    if !Api.caja-abierta: Dialogo {
+        titulo: "Abrir la caja";
+        ancho: 360px;
+        property <string> error;
+        Nota { text: "Para empezar a vender, cuenta el efectivo con el que empieza el día. La caja es una sola para todos."; }
+        fondo := Campo { etiqueta: "Fondo inicial"; numero: true; text: "0"; init => { self.enfocar(); } accepted => { error = Api.abrir-caja(fondo.text); } }
+        if error != "": Text { text: error; color: Tema.peligro; }
+        Button { text: "Abrir caja"; primary: true; clicked => { error = Api.abrir-caja(fondo.text); } }
+    }
+
+    if Api.pide-precio: Dialogo {
+        titulo: "¿Qué precio? — " + Api.producto-pendiente.nombre;
+        ancho: 420px;
+        cerrar => { Api.cancelar-pendiente(); enfocar(); }
+        property <int> elegido: 0;
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if e.text == Key.DownArrow { elegido = Math.mod(elegido + 1, Api.opciones-precio.length); return accept; }
+                if e.text == Key.UpArrow { elegido = Math.mod(elegido - 1 + Api.opciones-precio.length, Api.opciones-precio.length); return accept; }
+                if e.text == Key.Return { Api.elegir-precio(Api.opciones-precio[elegido].id); enfocar(); return accept; }
+                if e.text == Key.Escape { Api.cancelar-pendiente(); enfocar(); return accept; }
+                // 1, 2, 3… eligen directo
+                if e.text.is-float() && e.text.to-float() >= 1 && e.text.to-float() <= Api.opciones-precio.length {
+                    Api.elegir-precio(Api.opciones-precio[e.text.to-float() - 1].id);
+                    enfocar();
+                    return accept;
+                }
+                reject
+            }
+            VerticalLayout {
+                spacing: 4px;
+                Nota { text: "↑↓ y Enter, o el número de la opción."; }
+                for o[i] in Api.opciones-precio: Rectangle {
+                    height: 40px;
+                    background: i == elegido ? Tema.acento-suave : toque.has-hover ? Tema.panel-2 : Tema.panel;
+                    border-color: i == elegido ? Tema.acento : Tema.borde;
+                    border-width: 1px;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        Text { text: (i + 1) + "."; color: Tema.texto-3; vertical-alignment: center; width: 18px; }
+                        Text { text: o.nombre; font-weight: 700; color: Tema.texto; vertical-alignment: center; }
+                        Text { text: o.desde; color: Tema.texto-2; vertical-alignment: center; }
+                        Text { text: o.precio; font-size: 15px; font-weight: 700; color: Tema.texto; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                    toque := TouchArea { clicked => { Api.elegir-precio(o.id); enfocar(); } }
+                }
+            }
+        }
+    }
+
+    if Api.pide-peso: Dialogo {
+        titulo: Api.producto-pendiente.nombre + " — a granel";
+        ancho: 360px;
+        cerrar => { Api.cancelar-pendiente(); enfocar(); }
+        peso := Campo {
+            etiqueta: "Peso en kilos  (" + Api.producto-pendiente.precio + "/kg)";
+            numero: true;
+            placeholder: "0.000";
+            init => { self.enfocar(); }
+            accepted => { Api.agregar-peso(peso.text); enfocar(); }
+        }
+        if peso.text.to-float() > 0: Nota { text: "Importe aproximado: " + Api.pesos(peso.text.to-float() * Api.producto-pendiente.precio-numero); }
+        Button { text: "Agregar"; primary: true; clicked => { Api.agregar-peso(peso.text); enfocar(); } }
+    }
+
+    if cobrando: Cobro {
+        total: Api.venta.total;
+        total-numero: Api.venta.total.to-float();
+        cerrar => { cobrando = false; enfocar(); }
+        cobrada => { cobrando = false; }
+    }
+
+    if Api.mostrando-cobrada: Dialogo {
+        titulo: "Venta " + Api.cobrada.folio + " cobrada";
+        ancho: 380px;
+        cerrar => { Api.cerrar-cobrada(); enfocar(); }
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if e.text == Key.Return { Api.cerrar-cobrada(); enfocar(); return accept; }
+                if e.text == "p" || e.text == "P" { Api.imprimir-cobrada(); return accept; }
+                reject
+            }
+            VerticalLayout {
+                spacing: 10px;
+                Total { etiqueta: "Total"; valor: Api.cobrada.total; }
+                Rectangle {
+                    height: 56px;
+                    background: Tema.exito-suave;
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 12px;
+                        Text { text: "Cambio"; color: Tema.exito; font-size: 16px; vertical-alignment: center; }
+                        Text { text: Api.cambio; color: Tema.exito; font-size: 30px; font-weight: 700; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Button { text: "Imprimir ticket (P)"; clicked => { Api.imprimir-cobrada(); } }
+                    Button { text: "Nueva venta (Enter)"; primary: true; clicked => { Api.cerrar-cobrada(); enfocar(); } }
+                }
+            }
+        }
+    }
+
+    if pausando: Dialogo {
+        titulo: "Pausar la venta";
+        ancho: 380px;
+        cerrar => { pausando = false; enfocar(); }
+        nota-pausa := Campo {
+            etiqueta: "¿Cómo la reconoces después? (opcional)";
+            placeholder: "Señor de la camioneta roja";
+            init => { self.enfocar(); }
+            accepted => { if Api.pausar(nota-pausa.text) { pausando = false; enfocar(); } }
+        }
+        Button { text: "Pausar"; primary: true; clicked => { if Api.pausar(nota-pausa.text) { pausando = false; enfocar(); } } }
+    }
+
+    if cotizando: Dialogo {
+        titulo: "Guardar como cotización";
+        ancho: 380px;
+        cerrar => { cotizando = false; enfocar(); }
+        Nota { text: "No se cobra ni se descuenta inventario. Queda en «Cotizaciones» para imprimirla o convertirla en venta."; }
+        dias := Campo { etiqueta: "Respetar precios durante (días)"; numero: true; text: "15"; init => { self.enfocar(); } }
+        nota-cotizacion := Campo { etiqueta: "Nota (opcional)"; placeholder: "Obra de la calle 5"; }
+        Button {
+            text: "Guardar cotización";
+            primary: true;
+            clicked => { if Api.cotizar(dias.text, nota-cotizacion.text) { cotizando = false; enfocar(); } }
+        }
+    }
+
+    if eligiendo-cliente: Dialogo {
+        titulo: "Cliente de la venta";
+        ancho: 460px;
+        cerrar => { eligiendo-cliente = false; enfocar(); }
+        busqueda := Campo {
+            etiqueta: "Buscar por nombre, teléfono o RFC";
+            init => { self.enfocar(); }
+            edited(t) => { Api.buscar-clientes(t); }
+        }
+        Panel {
+            height: 220px;
+            ScrollView {
+                VerticalLayout {
+                alignment: start;
+                Renglon {
+                    indice: 0;
+                    clicked => { Api.asignar-cliente(0); eligiendo-cliente = false; enfocar(); }
+                    Celda { text: "Público general"; tenue: true; }
+                }
+                for c[i] in Api.clientes: Renglon {
+                    indice: i + 1;
+                    clicked => { Api.asignar-cliente(c.id); eligiendo-cliente = false; enfocar(); }
+                    Celda { text: c.nombre; }
+                    Celda { text: c.telefono; width: 120px; tenue: true; }
+                }
+                }
+            }
+        }
+        Text { text: "¿No está? Dalo de alta:"; color: Tema.texto-2; }
+        HorizontalLayout {
+            spacing: 6px;
+            nuevo-nombre := LineEdit { placeholder-text: "Nombre"; }
+            nuevo-telefono := LineEdit { placeholder-text: "Teléfono"; width: 130px; }
+            Button {
+                text: "Crear y usar";
+                enabled: nuevo-nombre.text != "";
+                clicked => {
+                    Api.crear-cliente-rapido(nuevo-nombre.text, nuevo-telefono.text);
+                    eligiendo-cliente = false;
+                    enfocar();
+                }
+            }
+        }
+    }
+}

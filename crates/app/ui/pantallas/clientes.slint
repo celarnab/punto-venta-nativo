@@ -1,0 +1,71 @@
+import { Button, LineEdit, ListView, TextEdit } from "std-widgets.slint";
+import { Api, ClienteUi } from "../api.slint";
+import { Tema, Panel, Titulo, Nota, Campo, Dialogo, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+
+export component Clientes inherits Rectangle {
+    property <bool> editando;
+    property <ClienteUi> actual;
+    property <string> error;
+    init => { Api.buscar-lista-clientes(""); }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 8px;
+            Titulo { text: "Clientes"; vertical-alignment: center; }
+            Rectangle { }
+            LineEdit { width: 300px; placeholder-text: "Buscar por nombre, teléfono o RFC"; edited(t) => { Api.buscar-lista-clientes(t); } }
+            Button { text: "Nuevo cliente"; primary: true; clicked => { actual = { id: 0 }; error = ""; editando = true; } }
+        }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Nombre"; }
+                    Columna { text: "Teléfono"; width: 140px; }
+                    Columna { text: "Correo"; width: 220px; }
+                    Columna { text: "RFC"; width: 140px; }
+                }
+                ListView {
+                    for c[i] in Api.lista-clientes: Renglon {
+                        indice: i;
+                        clicked => { actual = c; error = ""; editando = true; }
+                        Celda { text: c.nombre; fuerte: true; }
+                        Celda { text: c.telefono; width: 140px; }
+                        Celda { text: c.correo; width: 220px; }
+                        Celda { text: c.rfc; width: 140px; }
+                    }
+                }
+            }
+        }
+    }
+
+    if editando: Dialogo {
+        titulo: actual.id == 0 ? "Nuevo cliente" : actual.nombre;
+        ancho: 480px;
+        cerrar => { editando = false; }
+        nombre := Campo { etiqueta: "Nombre"; text: actual.nombre; init => { self.enfocar(); } }
+        HorizontalLayout {
+            spacing: 10px;
+            telefono := Campo { etiqueta: "Teléfono"; text: actual.telefono; }
+            rfc := Campo { etiqueta: "RFC"; text: actual.rfc; }
+        }
+        correo := Campo { etiqueta: "Correo"; text: actual.correo; }
+        Text { text: "Notas"; font-size: 12px; color: Tema.texto-2; }
+        notas := TextEdit { text: actual.notas; height: 70px; }
+        if error != "": Text { text: error; color: Tema.peligro; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancelar"; clicked => { editando = false; } }
+            Button {
+                text: "Guardar";
+                primary: true;
+                clicked => {
+                    error = Api.guardar-cliente({ id: actual.id, nombre: nombre.text, telefono: telefono.text, correo: correo.text, rfc: rfc.text, notas: notas.text });
+                    if error == "" { editando = false; }
+                }
+            }
+        }
+    }
+}

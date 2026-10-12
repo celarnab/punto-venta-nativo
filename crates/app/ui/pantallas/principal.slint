@@ -1,0 +1,138 @@
+// El marco de la app ya con sesión: menú a la izquierda y la pantalla elegida a la derecha.
+
+import { Button } from "std-widgets.slint";
+import { Api } from "../api.slint";
+import { Tema, Dialogo, Campo, Nota } from "../comunes.slint";
+import { Venta } from "venta.slint";
+import { Pausadas } from "pausadas.slint";
+import { Historial } from "historial.slint";
+import { Cotizaciones } from "cotizaciones.slint";
+import { Caja } from "caja.slint";
+import { Productos } from "productos.slint";
+import { Clientes } from "clientes.slint";
+import { Reportes } from "reportes.slint";
+import { Ajustes } from "ajustes.slint";
+
+component Opcion inherits Rectangle {
+    in property <string> clave;
+    in property <string> text;
+    in property <string> tecla;
+    property <bool> activa: Api.pantalla == clave;
+    height: 34px;
+    background: activa ? #ffffff : toque.has-hover ? #3a4652 : transparent;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            color: activa ? Tema.texto : #e6eaee;
+            font-weight: activa ? 700 : 400;
+            font-size: 13px;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.tecla;
+            color: activa ? Tema.texto-3 : #9aa5b1;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-alignment: right;
+        }
+    }
+    toque := TouchArea {
+        clicked => { Api.pantalla = clave; }
+    }
+}
+
+export component Principal inherits Rectangle {
+    property <bool> cambiando-pin;
+    property <string> error-pin;
+
+    HorizontalLayout {
+        Rectangle {
+            width: 200px;
+            background: #26313b;
+            VerticalLayout {
+                padding-top: 12px;
+                padding-bottom: 10px;
+                spacing: 1px;
+                Text {
+                    text: Api.negocio-nombre;
+                    color: white;
+                    font-size: 14px;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                    horizontal-alignment: left;
+                    x: 14px;
+                    width: parent.width - 28px;
+                }
+                Rectangle { height: 12px; }
+                Opcion { clave: "venta"; text: "Vender"; }
+                Opcion { clave: "pausadas"; text: "En pausa"; }
+                Opcion { clave: "historial"; text: "Ventas y devoluciones"; }
+                Opcion { clave: "cotizaciones"; text: "Cotizaciones"; }
+                Opcion { clave: "caja"; text: "Caja"; }
+                Opcion { clave: "productos"; text: "Productos"; }
+                Opcion { clave: "clientes"; text: "Clientes"; }
+                if Api.es-admin: Opcion { clave: "reportes"; text: "Reportes"; }
+                if Api.es-admin: Opcion { clave: "ajustes"; text: "Ajustes"; }
+                Rectangle { }
+                Rectangle {
+                    height: 1px;
+                    background: #3d4955;
+                }
+                VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+                    Text {
+                        text: Api.usuario + (Api.es-admin ? " · Administrador" : " · Cajero");
+                        color: #e6eaee;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
+                    Button {
+                        text: "Cambiar de usuario";
+                        clicked => { Api.salir(); }
+                    }
+                    Button {
+                        text: "Cambiar mi PIN";
+                        clicked => {
+                            error-pin = "";
+                            cambiando-pin = true;
+                        }
+                    }
+                }
+            }
+        }
+        Rectangle {
+            if Api.pantalla == "venta": Venta { }
+            if Api.pantalla == "pausadas": Pausadas { }
+            if Api.pantalla == "historial": Historial { }
+            if Api.pantalla == "cotizaciones": Cotizaciones { }
+            if Api.pantalla == "caja": Caja { }
+            if Api.pantalla == "productos": Productos { }
+            if Api.pantalla == "clientes": Clientes { }
+            if Api.pantalla == "reportes": Reportes { }
+            if Api.pantalla == "ajustes": Ajustes { }
+        }
+    }
+
+    if cambiando-pin: Dialogo {
+        titulo: "Cambiar mi PIN";
+        ancho: 320px;
+        cerrar => { cambiando-pin = false; }
+        nuevo := Campo {
+            etiqueta: "PIN nuevo (4 a 8 dígitos)";
+            tipo: InputType.password;
+            init => { self.enfocar(); }
+        }
+        if error-pin != "": Text { text: error-pin; color: Tema.peligro; }
+        Button {
+            text: "Guardar";
+            primary: true;
+            clicked => {
+                error-pin = Api.cambiar-mi-pin(nuevo.text);
+                if error-pin == "" { cambiando-pin = false; }
+            }
+        }
+    }
+}

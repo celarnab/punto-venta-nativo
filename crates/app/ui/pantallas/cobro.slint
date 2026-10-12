@@ -1,0 +1,116 @@
+// Cobrar: lo que entrega el cliente en cada forma de pago; el cambio sale del efectivo.
+
+import { Button, LineEdit } from "std-widgets.slint";
+import { Api } from "../api.slint";
+import { Tema, Dialogo, Campo, Nota, PinPad } from "../comunes.slint";
+
+export component Cobro inherits Dialogo {
+    titulo: "Cobrar";
+    ancho: 460px;
+    in property <string> total;
+    in property <float> total-numero;
+    // Viven aquí (y no en los campos) porque los campos están dentro de un `if`.
+    property <string> efectivo: total-numero;
+    property <string> tarjeta;
+    property <string> transferencia;
+    property <float> recibido: efectivo.to-float() + tarjeta.to-float() + transferencia.to-float();
+    property <float> diferencia: recibido - total-numero;
+    property <string> error;
+    property <string> pide-autorizacion;
+    callback cobrada();
+
+    function cobrar(pin: string) {
+        let respuesta = Api.cobrar([
+            { metodo: 0, monto: efectivo },
+            { metodo: 1, monto: tarjeta },
+            { metodo: 2, monto: transferencia },
+        ], pin);
+        if respuesta.ok {
+            root.cobrada();
+        } else if respuesta.autorizar {
+            pide-autorizacion = respuesta.mensaje;
+            error = pin == "" ? "" : "PIN incorrecto.";
+        } else {
+            error = respuesta.mensaje;
+        }
+    }
+
+    Text {
+        text: "Total a pagar  " + total;
+        font-size: 22px;
+        font-weight: 700;
+        horizontal-alignment: center;
+        color: Tema.texto;
+    }
+    if pide-autorizacion == "": VerticalLayout {
+        spacing: 8px;
+        Campo {
+            etiqueta: "Efectivo recibido";
+            numero: true;
+            text <=> root.efectivo;
+            init => { self.enfocar(); }
+            accepted => { if diferencia >= 0 { cobrar(""); } }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Exacto"; clicked => { root.efectivo = total-numero; } }
+            for billete in [100, 200, 500, 1000]: Button {
+                text: "$" + billete;
+                clicked => { root.efectivo = billete; }
+            }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            Campo { etiqueta: "Tarjeta"; numero: true; text <=> root.tarjeta; accepted => { if diferencia >= 0 { cobrar(""); } } }
+            Campo { etiqueta: "Transferencia"; numero: true; text <=> root.transferencia; accepted => { if diferencia >= 0 { cobrar(""); } } }
+        }
+        Rectangle {
+            height: 44px;
+            background: diferencia >= 0 ? Tema.exito-suave : Tema.aviso-suave;
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                Text {
+                    text: diferencia >= 0 ? "Cambio" : "Falta";
+                    color: diferencia >= 0 ? Tema.exito : Tema.aviso;
+                    font-size: 15px;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: Api.pesos(abs(diferencia));
+                    color: diferencia >= 0 ? Tema.exito : Tema.aviso;
+                    font-size: 20px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                }
+            }
+        }
+        if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button { text: "Cancelar"; clicked => { root.cerrar(); } }
+            Button {
+                text: "Cobrar (Enter)";
+                primary: true;
+                enabled: diferencia >= 0;
+                clicked => { cobrar(""); }
+            }
+        }
+    }
+    if pide-autorizacion != "": VerticalLayout {
+        spacing: 10px;
+        Nota { text: pide-autorizacion; }
+        Nota { text: "Un administrador debe escribir su PIN para cobrar así."; }
+        PinPad {
+            boton: "Autorizar";
+            init => { self.enfocar(); }
+            enviar(pin) => {
+                self.pin = "";
+                cobrar(pin);
+            }
+        }
+        if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+    }
+}

@@ -43,6 +43,11 @@ pub fn codificar(documento: &Documento, opciones: Opciones) -> Vec<u8> {
     bytes
 }
 
+/// Solo abrir el cajón de dinero, sin imprimir nada.
+pub fn abrir_cajon() -> Vec<u8> {
+    vec![ESC, b'@', ESC, b'p', 0, 25, 250]
+}
+
 /// Un carácter en la página de códigos 850 (la que traen casi todas): letras con acento, ñ, ¿, ¡…
 fn pc850(c: char) -> u8 {
     match c {

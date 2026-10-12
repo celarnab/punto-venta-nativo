@@ -1,0 +1,189 @@
+// Datos del negocio, usuarios, impresora de tickets y respaldos.
+
+import { Button, LineEdit, ListView, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { Api, UsuarioUi } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Cabecera, Columna, Renglon, Celda, Insignia } from "../comunes.slint";
+
+export component Ajustes inherits Rectangle {
+    property <string> error-negocio;
+    property <bool> editando-usuario;
+    property <UsuarioUi> usuario;
+    property <string> error-usuario;
+    property <bool> confirmando-restauracion;
+    property <string> resultado-restauracion;
+    property <int> impresora: Api.impresora-indice;
+    property <int> columnas: Api.impresora.columnas == 32 ? 0 : Api.impresora.columnas == 48 ? 2 : 1;
+    property <bool> cajon: Api.impresora.abrir-cajon;
+    property <bool> automatico: Api.impresora.automatico;
+    init => { Api.cargar-ajustes(); }
+
+    function guardar-impresora() {
+        Api.guardar-impresora({
+            nombre: impresora == 0 ? "" : Api.impresoras[impresora],
+            columnas: columnas == 0 ? 32 : columnas == 2 ? 48 : 42,
+            abrir-cajon: cajon,
+            automatico: automatico,
+        });
+    }
+
+    ScrollView {
+        HorizontalLayout {
+            padding: 14px;
+            spacing: 14px;
+            alignment: start;
+            VerticalLayout {
+                width: 440px;
+                spacing: 10px;
+                alignment: start;
+                Titulo { text: "Ajustes"; }
+                Panel {
+                    height: negocio.preferred-height;
+                    negocio := VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Subtitulo { text: "Negocio"; }
+                        Nota { text: "Aparece en tickets y cotizaciones."; }
+                        nombre := Campo { etiqueta: "Nombre"; text: Api.negocio.nombre; }
+                        direccion := Campo { etiqueta: "Dirección"; text: Api.negocio.direccion; }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            telefono := Campo { etiqueta: "Teléfono"; text: Api.negocio.telefono; }
+                            rfc := Campo { etiqueta: "RFC"; text: Api.negocio.rfc; }
+                            iva := Campo { etiqueta: "IVA (%)"; text: Api.negocio.iva; numero: true; width: 70px; }
+                        }
+                        pie := Campo { etiqueta: "Mensaje al pie del ticket"; text: Api.negocio.pie; }
+                        if error-negocio != "": Text { text: error-negocio; color: Tema.peligro; }
+                        Button {
+                            text: "Guardar";
+                            primary: true;
+                            clicked => {
+                                error-negocio = Api.guardar-negocio({ nombre: nombre.text, direccion: direccion.text, telefono: telefono.text, rfc: rfc.text, iva: iva.text, pie: pie.text });
+                            }
+                        }
+                    }
+                }
+                Panel {
+                    height: impresion.preferred-height;
+                    impresion := VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Subtitulo { text: "Impresora de tickets"; }
+                        Nota { text: "Una impresora térmica imprime el ticket al instante. Sin ella, los tickets se abren en PDF para imprimirlos en cualquier impresora."; }
+                        ComboBox {
+                            model: Api.impresoras;
+                            current-index <=> impresora;
+                            selected => { guardar-impresora(); }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text { text: "Ancho del papel"; vertical-alignment: center; color: Tema.texto-2; }
+                            ComboBox {
+                                model: ["58 mm (32 letras)", "80 mm (42 letras)", "80 mm (48 letras)"];
+                                current-index <=> columnas;
+                                selected => { guardar-impresora(); }
+                            }
+                        }
+                        CheckBox { text: "Abrir el cajón de dinero al cobrar en efectivo"; checked <=> cajon; toggled => { guardar-impresora(); } }
+                        CheckBox { text: "Imprimir el ticket al cobrar, sin preguntar"; checked <=> automatico; toggled => { guardar-impresora(); } }
+                        Button { text: "Imprimir ticket de prueba"; clicked => { Api.probar-impresora(); } }
+                    }
+                }
+            }
+            VerticalLayout {
+                width: 460px;
+                spacing: 10px;
+                alignment: start;
+                Rectangle { height: 22px; }
+                Panel {
+                    height: 300px;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        HorizontalLayout {
+                            Subtitulo { text: "Usuarios"; }
+                            Rectangle { }
+                            Button { text: "Nuevo usuario"; clicked => { usuario = { id: 0, activo: true }; error-usuario = ""; editando-usuario = true; } }
+                        }
+                        Panel {
+                            ListView {
+                                for u[i] in Api.usuarios: Renglon {
+                                    indice: i;
+                                    clicked => { usuario = u; error-usuario = ""; editando-usuario = true; }
+                                    Celda { text: u.nombre; fuerte: true; tenue: !u.activo; }
+                                    HorizontalLayout {
+                                        width: 200px;
+                                        alignment: end;
+                                        spacing: 4px;
+                                        Insignia { y: 6px; text: u.admin ? "Administrador" : "Cajero"; tinta: u.admin ? Tema.acento : Tema.texto-2; fondo: u.admin ? Tema.acento-suave : Tema.panel-2; }
+                                        if !u.activo: Insignia { y: 6px; text: "desactivado"; }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Panel {
+                    height: respaldos.preferred-height;
+                    respaldos := VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Subtitulo { text: "Respaldos"; }
+                        Nota { text: "Cada día que se abre la app se guarda un respaldo automático (se conservan los últimos 30). Guarda también una copia fuera de esta computadora."; }
+                        Nota { text: "Datos en: " + Api.carpeta-datos; }
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Button { text: "Crear respaldo…"; clicked => { Api.respaldar(); } }
+                            Button { text: "Abrir carpeta"; clicked => { Api.abrir-carpeta-datos(); } }
+                        }
+                        Rectangle { height: 1px; background: Tema.borde; }
+                        Subtitulo { text: "Restaurar una base de datos"; }
+                        Nota { text: "Reemplaza TODOS los datos de esta computadora con los de un respaldo o de otra computadora. Antes se guarda una copia de lo actual."; }
+                        if !confirmando-restauracion: Button { text: "Restaurar desde archivo…"; clicked => { resultado-restauracion = ""; confirmando-restauracion = true; } }
+                        if confirmando-restauracion: HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: "¿Seguro? Se reemplaza todo."; color: Tema.peligro; vertical-alignment: center; }
+                            Button {
+                                text: "Sí, elegir archivo";
+                                clicked => {
+                                    resultado-restauracion = Api.restaurar();
+                                    confirmando-restauracion = false;
+                                }
+                            }
+                            Button { text: "No"; clicked => { confirmando-restauracion = false; } }
+                        }
+                        if resultado-restauracion != "": Nota { text: resultado-restauracion; }
+                    }
+                }
+            }
+        }
+    }
+
+    if editando-usuario: Dialogo {
+        titulo: usuario.id == 0 ? "Nuevo usuario" : usuario.nombre;
+        ancho: 380px;
+        property <bool> admin: usuario.admin;
+        property <bool> activo: usuario.activo;
+        cerrar => { editando-usuario = false; }
+        nombre-usuario := Campo { etiqueta: "Nombre"; text: usuario.nombre; init => { self.enfocar(); } }
+        CheckBox { text: "Administrador (productos, reportes, ajustes, autorizaciones)"; checked <=> admin; }
+        if usuario.id != 0: CheckBox { text: "Puede entrar"; checked <=> activo; }
+        pin := Campo {
+            etiqueta: usuario.id == 0 ? "PIN (4 a 8 dígitos)" : "PIN nuevo (vacío = no cambiarlo)";
+            tipo: InputType.password;
+        }
+        if error-usuario != "": Text { text: error-usuario; color: Tema.peligro; wrap: word-wrap; }
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+            Button { text: "Cancelar"; clicked => { editando-usuario = false; } }
+            Button {
+                text: "Guardar";
+                primary: true;
+                clicked => {
+                    error-usuario = Api.guardar-usuario(usuario.id, nombre-usuario.text, admin, activo, pin.text);
+                    if error-usuario == "" { editando-usuario = false; }
+                }
+            }
+        }
+    }
+}

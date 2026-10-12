@@ -1,0 +1,128 @@
+// La caja de esta computadora, compartida por todos: corte parcial, cierre y cortes anteriores.
+
+import { Button, LineEdit, ListView } from "std-widgets.slint";
+import { Api, CorteUi } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+
+component Linea inherits HorizontalLayout {
+    in property <string> etiqueta;
+    in property <string> valor;
+    in property <bool> fuerte;
+    in property <bool> sangria;
+    in property <color> tinta: Tema.texto;
+    padding-left: sangria ? 14px : 0px;
+    Text { text: etiqueta; color: fuerte ? Tema.texto : Tema.texto-2; font-weight: fuerte ? 700 : 400; }
+    Text { text: valor; color: tinta; font-weight: fuerte ? 700 : 400; horizontal-alignment: right; }
+}
+
+export component DetalleCorte inherits VerticalLayout {
+    in property <CorteUi> corte;
+    spacing: 5px;
+    Linea { etiqueta: "Fondo inicial"; valor: corte.fondo; }
+    Linea { etiqueta: "Ventas (" + corte.ventas + ")"; valor: corte.total; }
+    for m in corte.por-metodo: Linea { etiqueta: m.etiqueta; valor: m.valor; sangria: true; }
+    for m in corte.devoluciones: Linea { etiqueta: "Devoluciones en " + m.etiqueta; valor: "−" + m.valor; }
+    if corte.por-cajero.length > 1: Text { text: "Por quién vendió"; color: Tema.texto-2; font-weight: 700; }
+    if corte.por-cajero.length > 1: VerticalLayout {
+        spacing: 5px;
+        for m in corte.por-cajero: Linea { etiqueta: m.etiqueta; valor: m.valor; sangria: true; }
+    }
+    Rectangle { height: 1px; background: Tema.borde; }
+    Linea { etiqueta: "Efectivo esperado en caja"; valor: corte.esperado; fuerte: true; }
+    if corte.contado != "": Linea { etiqueta: "Efectivo contado"; valor: corte.contado; }
+    if corte.diferencia-etiqueta != "": Linea {
+        etiqueta: corte.diferencia-etiqueta;
+        valor: corte.diferencia;
+        fuerte: true;
+        tinta: corte.diferencia-etiqueta == "Faltante" ? Tema.peligro : corte.diferencia-etiqueta == "Sobrante" ? Tema.aviso : Tema.exito;
+    }
+}
+
+export component Caja inherits Rectangle {
+    property <string> error;
+    property <int> viendo: -1;
+    init => { Api.cargar-caja(); }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+        Titulo { text: "Caja"; }
+        Nota {
+            text: Api.corte.abierta
+                ? "Abierta desde " + Api.corte.desde + " por " + Api.corte.abrio + ". Todos los que entran venden en esta caja."
+                : "La caja está cerrada. Se abre al empezar a vender.";
+        }
+        if Api.corte.abierta: HorizontalLayout {
+            spacing: 12px;
+            alignment: start;
+            Panel {
+                width: 380px;
+                height: parcial.preferred-height;
+                parcial := VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+                    Subtitulo { text: "Corte parcial"; }
+                    DetalleCorte { corte: Api.corte; }
+                    Button { text: "Imprimir corte parcial"; clicked => { Api.imprimir-corte(Api.corte.id); } }
+                }
+            }
+            Panel {
+                width: 340px;
+                height: cierre.preferred-height;
+                cierre := VerticalLayout {
+                    padding: 14px;
+                    spacing: 8px;
+                    Subtitulo { text: "Cerrar caja"; }
+                    Nota { text: "Cuenta el efectivo del cajón (incluido el fondo) y escríbelo. Se imprime el corte."; }
+                    contado := Campo { etiqueta: "Efectivo contado"; numero: true; placeholder: "0.00"; }
+                    if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+                    Button {
+                        text: "Cerrar caja y hacer corte";
+                        primary: true;
+                        enabled: contado.text != "";
+                        clicked => { error = Api.cerrar-caja(contado.text); }
+                    }
+                }
+            }
+        }
+        Subtitulo { text: "Cortes anteriores"; }
+        Panel {
+            VerticalLayout {
+                Cabecera {
+                    Columna { text: "Abierta"; width: 140px; }
+                    Columna { text: "Cerrada"; width: 140px; }
+                    Columna { text: "Abrió"; width: 120px; }
+                    Columna { text: "Hizo el corte"; width: 120px; }
+                    Columna { text: "Ventas"; derecha: true; }
+                    Columna { text: "Diferencia"; width: 140px; derecha: true; }
+                }
+                ListView {
+                    for c[i] in Api.cortes: Renglon {
+                        indice: i;
+                        clicked => { viendo = i; }
+                        Celda { text: c.desde; width: 140px; }
+                        Celda { text: c.hasta; width: 140px; }
+                        Celda { text: c.abrio; width: 120px; }
+                        Celda { text: c.cerro; width: 120px; }
+                        Celda { text: c.total; derecha: true; }
+                        Celda {
+                            text: c.diferencia-etiqueta == "" ? "—" : c.diferencia-etiqueta + " " + c.diferencia;
+                            width: 140px;
+                            derecha: true;
+                            color: c.diferencia-etiqueta == "Faltante" ? Tema.peligro : Tema.texto;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if viendo >= 0: Dialogo {
+        titulo: "Corte del " + Api.cortes[viendo].desde;
+        ancho: 400px;
+        cerrar => { viendo = -1; }
+        Nota { text: "Abrió " + Api.cortes[viendo].abrio + (Api.cortes[viendo].cerro != "" ? " · cerró " + Api.cortes[viendo].cerro + " el " + Api.cortes[viendo].hasta : ""); }
+        DetalleCorte { corte: Api.cortes[viendo]; }
+        Button { text: "Imprimir"; clicked => { Api.imprimir-corte(Api.cortes[viendo].id); } }
+    }
+}

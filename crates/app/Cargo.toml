@@ -1,0 +1,24 @@
+[package]
+name = "punto-venta"
+description = "Punto de venta de escritorio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+nucleo = { path = "../nucleo" }
+impresion = { path = "../impresion" }
+slint = "1.18.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+chrono = "0.4.45"
+rfd = "0.17.2"
+directories = "6.0.0"
+png = { version = "0.18.1", optional = true }
+
+[build-dependencies]
+slint-build = "1.18.1"
+
+[features]
+# Solo para desarrollo: `cargo run --features captura -- --captura carpeta/` dibuja cada pantalla con
+# datos de ejemplo y guarda imágenes, sin abrir ventanas.
+captura = ["slint/renderer-software", "slint/software-renderer-systemfonts", "dep:png"]

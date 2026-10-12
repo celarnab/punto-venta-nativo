@@ -1,0 +1,14 @@
+[package]
+name = "impresion"
+description = "Tickets ESC/POS, documentos PDF y envío a impresoras del sistema"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = "0.4.45"
+nucleo = { path = "../nucleo" }
+open = "5.4.4"
+printpdf = { version = "0.12.8", default-features = false }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Printing", "Win32_Graphics_Gdi"] }

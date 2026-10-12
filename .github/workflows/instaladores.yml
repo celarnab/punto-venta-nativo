@@ -1,0 +1,74 @@
+# Pruebas en cada push; instaladores para Windows, macOS y Linux al publicar una etiqueta vX.Y.Z o a mano.
+name: Instaladores
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Lo que necesita Slint (ventanas, fuentes y teclado) para compilar en Linux.
+  DEPENDENCIAS_LINUX: libfontconfig1-dev libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev libx11-xcb-dev libwayland-dev libgl1-mesa-dev
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y $DEPENDENCIAS_LINUX
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p nucleo -p impresion
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+  instaladores:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: pruebas
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { sistema: windows-latest, objetivo: x86_64-pc-windows-msvc, formatos: nsis, nombre: Windows }
+          - { sistema: macos-latest, objetivo: aarch64-apple-darwin, formatos: dmg, nombre: macOS-AppleSilicon }
+          - { sistema: macos-latest, objetivo: x86_64-apple-darwin, formatos: dmg, nombre: macOS-Intel }
+          - { sistema: ubuntu-22.04, objetivo: x86_64-unknown-linux-gnu, formatos: "deb,appimage", nombre: Linux }
+    runs-on: ${{ matrix.sistema }}
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y $DEPENDENCIAS_LINUX libfuse2
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.objetivo }}" }
+      - uses: Swatinem/rust-cache@v2
+        with: { key: "${{ matrix.objetivo }}" }
+      - run: cargo install cargo-packager --locked
+      - name: Compilar e instaladores
+        working-directory: crates/app
+        shell: bash
+        run: |
+          cargo build --release -p punto-venta --target ${{ matrix.objetivo }}
+          cargo packager --release --target ${{ matrix.objetivo }} --formats ${{ matrix.formatos }} \
+            --before-packaging-command ""
+      - uses: actions/upload-artifact@v4
+        with:
+          name: instalador-${{ matrix.nombre }}
+          if-no-files-found: error
+          path: |
+            target/instaladores/*.exe
+            target/instaladores/*.dmg
+            target/instaladores/*.deb
+            target/instaladores/*.AppImage
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            target/instaladores/*.exe
+            target/instaladores/*.dmg
+            target/instaladores/*.deb
+            target/instaladores/*.AppImage

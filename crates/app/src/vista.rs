@@ -129,6 +129,7 @@ pub fn venta(v: &Venta, devoluciones: &[Devolucion], a_devolver: impl Fn(i64) ->
         vigencia: texto(v.vigencia.map(|f| f.format("%d/%m/%Y").to_string()).unwrap_or_default()),
         vencida: v.vigencia.is_some_and(|f| f < hoy()),
         con_devolucion: v.partidas.iter().any(|p| p.devuelto.es_positivo()),
+        se_puede_devolver: v.partidas.iter().any(|p| p.devuelto < p.cantidad),
         devoluciones: modelo(devoluciones.iter().map(|d| FilaUi {
             id: d.id as i32,
             etiqueta: texto(format!("{} · {} · {}", fecha_corta(d.creada), d.metodo.etiqueta(), d.motivo)),

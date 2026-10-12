@@ -24,15 +24,15 @@ pub fn documento(
             };
             sistema::imprimir_crudo(impresora, &escpos::codificar(doc, opciones))
         }
-        None => abrir_pdf(carpeta, nombre, &pdf::rollo(doc, configuracion.columnas)),
+        None => abrir_pdf(configuracion, carpeta, nombre, &pdf::rollo(doc, configuracion.columnas)),
     }
 }
 
 /// Guarda el PDF en la carpeta de impresiones y lo abre con el visor del sistema.
-pub fn abrir_pdf(carpeta: &Path, nombre: &str, bytes: &[u8]) -> Result<(), String> {
+pub fn abrir_pdf(configuracion: &Configuracion, carpeta: &Path, nombre: &str, bytes: &[u8]) -> Result<(), String> {
     let carpeta = carpeta.join("impresiones");
     std::fs::create_dir_all(&carpeta).map_err(|e| e.to_string())?;
     let ruta = carpeta.join(format!("{nombre}.pdf"));
     std::fs::write(&ruta, bytes).map_err(|e| format!("No se pudo guardar {}: {e}", ruta.display()))?;
-    sistema::abrir(&ruta)
+    if configuracion.sin_ventanas { Ok(()) } else { sistema::abrir(&ruta) }
 }

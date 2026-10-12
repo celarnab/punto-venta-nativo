@@ -134,7 +134,7 @@ export component Historial inherits Rectangle {
                 text: "Cancelar venta";
                 clicked => { error = ""; cancelando = true; }
             }
-            if Api.detalle.estado == "pagada": Button {
+            if Api.detalle.estado == "pagada" && Api.detalle.se-puede-devolver: Button {
                 text: "Devolución";
                 clicked => { error = ""; motivo = ""; metodo-devolucion = 0; Api.empezar-devolucion(); devolviendo = true; }
             }

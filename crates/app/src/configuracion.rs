@@ -14,11 +14,14 @@ pub struct Configuracion {
     pub abrir_cajon: bool,
     /// Imprimir el ticket en cuanto se cobra.
     pub automatico: bool,
+    /// Generar los PDF sin abrirlos (para las capturas de pantalla).
+    #[serde(skip)]
+    pub sin_ventanas: bool,
 }
 
 impl Default for Configuracion {
     fn default() -> Self {
-        Self { impresora: None, columnas: 42, abrir_cajon: false, automatico: false }
+        Self { impresora: None, columnas: 42, abrir_cajon: false, automatico: false, sin_ventanas: false }
     }
 }
 

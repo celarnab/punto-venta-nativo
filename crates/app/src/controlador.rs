@@ -399,7 +399,7 @@ pub fn conectar(app: &App, estado: Compartido) {
     conectar!(api, app, estado, on_cotizacion_pdf, |app, e, id| {
         let resultado = e.bd.ticket(id.into()).map_err(|e| e.to_string()).and_then(|ticket| {
             let nombre = format!("cotizacion-{}", ticket.venta.folio_cotizacion.unwrap_or_default());
-            imprimir::abrir_pdf(&e.carpeta, &nombre, &impresion::pdf::cotizacion(&ticket))
+            imprimir::abrir_pdf(&e.configuracion, &e.carpeta, &nombre, &impresion::pdf::cotizacion(&ticket))
         });
         if let Err(error) = resultado {
             avisar(&app, error, true);

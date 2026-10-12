@@ -17,7 +17,7 @@ use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, Rgb8Pixel};
 
 use crate::estado::Estado;
-use crate::{Api, App, controlador};
+use crate::{Api, App, CobroUi, controlador};
 
 const ANCHO: u32 = 1366;
 const ALTO: u32 = 768;
@@ -36,7 +36,8 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     slint::platform::set_platform(Box::new(SinVentana(ventana.clone()))).map_err(|e| e.to_string())?;
 
     let (bd, ids) = ejemplo()?;
-    let estado = Estado::new(bd, std::env::temp_dir().join("punto-venta-captura"));
+    let mut estado = Estado::new(bd, std::env::temp_dir().join("punto-venta-captura"));
+    estado.configuracion = crate::configuracion::Configuracion { sin_ventanas: true, ..Default::default() };
     let app = App::new()?;
     ventana.set_size(slint::PhysicalSize::new(ANCHO, ALTO));
     app.show()?;
@@ -59,6 +60,11 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     api.invoke_confirmar_busqueda("CLA-2".into());
     foto("05-peso")?;
     api.invoke_cancelar_pendiente();
+    let cobro = [CobroUi { metodo: 0, monto: "1000".into() }];
+    let respuesta = api.invoke_cobrar(slint::ModelRc::new(slint::VecModel::from(cobro.to_vec())), "".into());
+    assert!(respuesta.ok, "no se pudo cobrar: {}", respuesta.mensaje);
+    foto("05b-cobrada")?;
+    api.invoke_cerrar_cobrada();
 
     for (pantalla, nombre) in [
         ("pausadas", "06-pausadas"),
@@ -76,6 +82,11 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             "historial" => {
                 api.invoke_ver_venta(ids.venta_con_devolucion as i32);
                 foto("08-detalle")?;
+                api.invoke_empezar_devolucion();
+                api.invoke_devolver_todo();
+                let respuesta = api.invoke_devolver(0, "Prueba".into(), "1234".into());
+                assert!(respuesta.ok, "no se pudo devolver: {}", respuesta.mensaje);
+                foto("08b-devuelta")?;
                 api.invoke_cerrar_detalle();
             }
             "productos" => {

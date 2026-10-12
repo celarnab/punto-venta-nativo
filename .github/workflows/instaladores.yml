@@ -52,8 +52,7 @@ jobs:
         shell: bash
         run: |
           cargo build --release -p punto-venta --target ${{ matrix.objetivo }}
-          cargo packager --release --target ${{ matrix.objetivo }} --formats ${{ matrix.formatos }} \
-            --before-packaging-command ""
+          cargo packager --release --target ${{ matrix.objetivo }} --formats ${{ matrix.formatos }}
       - uses: actions/upload-artifact@v4
         with:
           name: instalador-${{ matrix.nombre }}

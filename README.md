@@ -63,6 +63,7 @@ cargo run -p punto-venta --features captura -- --captura capturas/   # fotos de 
 
 ```sh
 cargo install cargo-packager --locked
+cargo build --release -p punto-venta
 cd crates/app && cargo packager --release      # el instalador de este sistema, en target/instaladores/
 ```
 

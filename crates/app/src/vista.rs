@@ -98,6 +98,9 @@ pub fn partida(p: &Partida, a_devolver: Option<Cantidad>) -> PartidaUi {
         devuelto: texto(if p.devuelto.es_positivo() { p.devuelto.to_string() } else { "—".into() }),
         pendiente: texto((p.cantidad - p.devuelto).to_string()),
         a_devolver: texto(a_devolver.map(|c| c.to_string()).unwrap_or_default()),
+        sugerencia: texto(
+            p.sugerencia.as_ref().map(|s| format!("{} {}", s.nombre, s.precio.pesos())).unwrap_or_default(),
+        ),
     }
 }
 

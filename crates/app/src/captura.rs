@@ -56,7 +56,8 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     foto("03-busqueda")?;
     api.invoke_confirmar_busqueda("150*TOR-832".into());
     foto("04-precio")?;
-    api.invoke_elegir_precio(ids.contratista as i32);
+    api.invoke_elegir_precio(0); // el normal, aunque 150 alcance el mayoreo: queda la sugerencia
+    foto("04b-sugerencia")?;
     api.invoke_confirmar_busqueda("CLA-2".into());
     foto("05-peso")?;
     api.invoke_cancelar_pendiente();
@@ -88,6 +89,22 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 assert!(respuesta.ok, "no se pudo devolver: {}", respuesta.mensaje);
                 foto("08b-devuelta")?;
                 api.invoke_cerrar_detalle();
+            }
+            "ajustes" => {
+                // Clic en «Nuevo usuario».
+                for evento in [
+                    slint::platform::WindowEvent::PointerPressed {
+                        position: slint::LogicalPosition::new(1058.0, 74.0),
+                        button: slint::platform::PointerEventButton::Left,
+                    },
+                    slint::platform::WindowEvent::PointerReleased {
+                        position: slint::LogicalPosition::new(1058.0, 74.0),
+                        button: slint::platform::PointerEventButton::Left,
+                    },
+                ] {
+                    app.window().dispatch_event(evento);
+                }
+                foto("16-usuario")?;
             }
             "productos" => {
                 api.invoke_editar_producto(ids.tornillo as i32);
@@ -122,7 +139,6 @@ fn guardar(ventana: &MinimalSoftwareWindow, ruta: &Path) -> Result<(), Box<dyn s
 struct Ids {
     vianet: i64,
     tornillo: i64,
-    contratista: i64,
     venta_con_devolucion: i64,
 }
 
@@ -222,6 +238,5 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     bd.agregar(pausada, tornillo.id, c("40"), None)?;
     bd.pausar(pausada, "Señor de la camioneta roja")?;
 
-    let contratista = tornillo.precios.iter().find(|p| p.nombre == "Contratista").map_or(0, |p| p.id);
-    Ok((bd, Ids { vianet: vianet.id, tornillo: tornillo.id, contratista, venta_con_devolucion: con_devolucion.id }))
+    Ok((bd, Ids { vianet: vianet.id, tornillo: tornillo.id, venta_con_devolucion: con_devolucion.id }))
 }

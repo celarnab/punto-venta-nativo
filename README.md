@@ -8,8 +8,9 @@ navegador ni web view.
 
 - **Vender** con escáner o teclado. `3*martillo` agrega 3 piezas y `0.5*clavo` agrega medio kilo; F2 busca, F4 pausa,
   F6 cotiza y F12 cobra.
-  - Si el producto tiene **varios precios**, al agregarlo pregunta cuál (Normal con mayoreo automático, Mayoreo,
-    Contratista…), con ↑↓, Enter o el número.
+  - Si el producto tiene **varios precios**, al agregarlo pregunta cuál (Normal, Mayoreo, Contratista…), con ↑↓,
+    Enter o el número. El mayoreo nunca se aplica solo: si la cantidad lo alcanza, se **sugiere** (preseleccionado al
+    agregar, o como «¿Mayoreo $1.25?» en la partida) y el cajero decide.
   - Si es **a granel**, pregunta el peso.
 - **Por unidad o a granel**: cada producto se vende de una sola forma. A granel es por kilo, con decimales, y la
   existencia se cuenta en kg.

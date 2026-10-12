@@ -80,7 +80,7 @@ component EditorProducto inherits Dialogo {
                 }
             }
             Subtitulo { text: "Otros precios"; }
-            Nota { text: "Con «desde» se aplican solos al llevar esa cantidad (mayoreo). Si el producto tiene otros precios, al venderlo se pregunta cuál."; }
+            Nota { text: "Al vender un producto con varios precios se pregunta cuál. Con «desde», ese precio se sugiere al llevar esa cantidad (mayoreo), pero el cajero decide."; }
             for pr[i] in Api.editor.precios: HorizontalLayout {
                 spacing: 6px;
                 LineEdit { text: pr.nombre; placeholder-text: "Mayoreo, Contratista…"; edited(t) => { Api.editar-otro-precio(i, 0, t); } }

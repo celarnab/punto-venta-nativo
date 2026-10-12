@@ -62,13 +62,13 @@ pub struct Producto {
 }
 
 impl Producto {
-    /// El precio del escalón más alto que alcanza `cantidad`; si ninguno, el normal.
-    pub fn precio_para(&self, cantidad: Cantidad) -> Dinero {
+    /// El precio de mayoreo que corresponde a `cantidad` (el escalón más alto que alcanza), si hay.
+    /// Es una sugerencia: el precio de una venta siempre lo decide el cajero.
+    pub fn sugerido(&self, cantidad: Cantidad) -> Option<&OtroPrecio> {
         self.precios
             .iter()
             .filter(|p| p.cantidad_minima.is_some_and(|minima| minima <= cantidad))
             .max_by_key(|p| p.cantidad_minima)
-            .map_or(self.precio, |p| p.precio)
     }
 
     /// Ganancia sobre el precio normal, en %.
@@ -451,7 +451,7 @@ fn consultar(conn: &Connection, sql: &str, parametros: impl rusqlite::Params) ->
     Ok(productos)
 }
 
-fn otros_precios(conn: &Connection, producto_id: i64) -> Resultado<Vec<OtroPrecio>> {
+pub(crate) fn otros_precios(conn: &Connection, producto_id: i64) -> Resultado<Vec<OtroPrecio>> {
     let mut consulta = conn.prepare_cached(
         "SELECT id, nombre, precio, cantidad_minima FROM precios WHERE producto_id = ?1
          ORDER BY cantidad_minima IS NULL, cantidad_minima, precio",
@@ -565,9 +565,10 @@ pub(crate) mod tests {
                 ..datos("TOR", "Tornillo", "1", "0.4")
             })
             .unwrap();
-        assert_eq!(tornillo.precio_para(c("9")), d("1"));
-        assert_eq!(tornillo.precio_para(c("10")), d("0.80"));
-        assert_eq!(tornillo.precio_para(c("250")), d("0.70"));
+        let sugerido = |cantidad: &str| tornillo.sugerido(c(cantidad)).map(|p| p.precio);
+        assert_eq!(sugerido("9"), None);
+        assert_eq!(sugerido("10"), Some(d("0.80")));
+        assert_eq!(sugerido("250"), Some(d("0.70")));
         assert_eq!(tornillo.precios.last().unwrap().nombre, "Contratista");
     }
 

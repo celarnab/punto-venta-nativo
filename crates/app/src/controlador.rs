@@ -197,7 +197,11 @@ pub fn conectar(app: &App, estado: Compartido) {
                 avisar(&app, "Este producto tiene un solo precio.", true)
             }
             Ok((partida, producto)) => {
-                preguntar_precio(&app, &mut e, Pendiente { producto, cantidad: None, partida: Some(partida) })
+                let cantidad = venta_actual(&e)
+                    .and_then(|v| e.bd.venta(v))
+                    .ok()
+                    .and_then(|v| v.partidas.iter().find(|p| p.id == partida).map(|p| p.cantidad));
+                preguntar_precio(&app, &mut e, Pendiente { producto, cantidad, partida: Some(partida) })
             }
             Err(error) => avisar(&app, error.to_string(), true),
         }
@@ -849,11 +853,7 @@ fn preguntar_precio(app: &App, e: &mut Estado, pendiente: Pendiente) {
         id: 0,
         nombre: "Normal".into(),
         precio: format!("{}{unidad}", producto.precio.pesos()).into(),
-        desde: if producto.precios.iter().any(|p| p.cantidad_minima.is_some()) {
-            "(mayoreo automático)".into()
-        } else {
-            SharedString::new()
-        },
+        desde: SharedString::new(),
     };
     let otros = producto.precios.iter().map(|p| PrecioUi {
         id: p.id as i32,
@@ -861,9 +861,16 @@ fn preguntar_precio(app: &App, e: &mut Estado, pendiente: Pendiente) {
         precio: format!("{}{unidad}", p.precio.pesos()).into(),
         desde: p.cantidad_minima.map(|c| format!("desde {c}")).unwrap_or_default().into(),
     });
+    // Se propone el mayoreo que alcanza la cantidad; si no, el normal. El cajero decide.
+    let sugerido = pendiente
+        .cantidad
+        .and_then(|cantidad| producto.sugerido(cantidad))
+        .and_then(|s| producto.precios.iter().position(|p| p.id == s.id))
+        .map_or(0, |i| i as i32 + 1);
     let api = app.global::<Api>();
     api.set_producto_pendiente(vista::producto(producto));
     api.set_opciones_precio(vista::modelo(std::iter::once(normal).chain(otros)));
+    api.set_precio_sugerido(sugerido);
     api.set_pide_precio(true);
     e.pendiente = Some(pendiente);
 }

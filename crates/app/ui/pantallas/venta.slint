@@ -110,7 +110,27 @@ export component Venta inherits Rectangle {
                                 indice: i;
                                 height: 36px;
                                 Celda { text: p.codigo; width: 120px; tenue: true; }
-                                Celda { text: p.descripcion; }
+                                HorizontalLayout {
+                                    spacing: 6px;
+                                    Celda { text: p.descripcion; }
+                                    if p.sugerencia != "": Rectangle {
+                                        width: sugerida.preferred-width + 12px;
+                                        height: 20px;
+                                        y: 8px;
+                                        background: sugerir.has-hover ? Tema.acento : Tema.acento-suave;
+                                        border-radius: 3px;
+                                        sugerida := Text {
+                                            text: "¿" + p.sugerencia + "?";
+                                            color: sugerir.has-hover ? white : Tema.acento;
+                                            font-size: 11px;
+                                            font-weight: 600;
+                                        }
+                                        sugerir := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { Api.cambiar-precio(p.id); }
+                                        }
+                                    }
+                                }
                                 HorizontalLayout {
                                     width: 150px;
                                     spacing: 2px;
@@ -252,7 +272,7 @@ export component Venta inherits Rectangle {
         titulo: "¿Qué precio? — " + Api.producto-pendiente.nombre;
         ancho: 420px;
         cerrar => { Api.cancelar-pendiente(); enfocar(); }
-        property <int> elegido: 0;
+        property <int> elegido: Api.precio-sugerido;
         FocusScope {
             init => { self.focus(); }
             key-pressed(e) => {
@@ -283,6 +303,7 @@ export component Venta inherits Rectangle {
                         Text { text: (i + 1) + "."; color: Tema.texto-3; vertical-alignment: center; width: 18px; }
                         Text { text: o.nombre; font-weight: 700; color: Tema.texto; vertical-alignment: center; }
                         Text { text: o.desde; color: Tema.texto-2; vertical-alignment: center; }
+                        if i == Api.precio-sugerido && i > 0: Text { text: "sugerido"; color: Tema.acento; font-weight: 700; vertical-alignment: center; }
                         Text { text: o.precio; font-size: 15px; font-weight: 700; color: Tema.texto; horizontal-alignment: right; vertical-alignment: center; }
                     }
                     toque := TouchArea { clicked => { Api.elegir-precio(o.id); enfocar(); } }

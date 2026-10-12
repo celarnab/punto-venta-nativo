@@ -160,15 +160,17 @@ export component Ajustes inherits Rectangle {
 
     if editando-usuario: Dialogo {
         titulo: usuario.id == 0 ? "Nuevo usuario" : usuario.nombre;
-        ancho: 380px;
+        ancho: 460px;
         property <bool> admin: usuario.admin;
         property <bool> activo: usuario.activo;
         cerrar => { editando-usuario = false; }
         nombre-usuario := Campo { etiqueta: "Nombre"; text: usuario.nombre; init => { self.enfocar(); } }
-        CheckBox { text: "Administrador (productos, reportes, ajustes, autorizaciones)"; checked <=> admin; }
+        CheckBox { text: "Administrador"; checked <=> admin; }
+        Nota { text: "Un administrador además maneja productos, reportes y ajustes, y autoriza con su PIN (ventas bajo costo, cancelaciones y devoluciones)."; }
         if usuario.id != 0: CheckBox { text: "Puede entrar"; checked <=> activo; }
         pin := Campo {
-            etiqueta: usuario.id == 0 ? "PIN (4 a 8 dígitos)" : "PIN nuevo (vacío = no cambiarlo)";
+            etiqueta: usuario.id == 0 ? "PIN" : "PIN nuevo";
+            ayuda: usuario.id == 0 ? "De 4 a 8 dígitos." : "Déjalo vacío para no cambiarlo.";
             tipo: InputType.password;
         }
         if error-usuario != "": Text { text: error-usuario; color: Tema.peligro; wrap: word-wrap; }

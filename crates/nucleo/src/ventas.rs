@@ -37,6 +37,16 @@ pub struct Partida {
     pub importe: Dinero,
     /// Lo que el cliente ya regresó.
     pub devuelto: Cantidad,
+    /// Un precio de mayoreo que la cantidad ya alcanza y que no es el que lleva (solo en ventas abiertas).
+    pub sugerencia: Option<Sugerencia>,
+}
+
+/// Precio que se le sugiere al cajero; él decide si lo usa.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Sugerencia {
+    pub precio_id: i64,
+    pub nombre: String,
+    pub precio: Dinero,
 }
 
 impl Partida {
@@ -57,6 +67,7 @@ impl Partida {
             costo: fila.get("costo")?,
             importe: fila.get("importe")?,
             devuelto: fila.get("devuelto")?,
+            sugerencia: None,
         })
     }
 }
@@ -175,8 +186,8 @@ impl Bd {
 
     /// Suma (o resta, si es negativa) `cantidad` del producto; la partida desaparece al llegar a cero.
     ///
-    /// `precio_elegido`: uno de los otros precios del producto, que queda fijo. `None` = el normal, que
-    /// sigue a la cantidad (mayoreo), salvo que la partida ya tuviera un precio elegido.
+    /// `precio_elegido`: uno de los otros precios del producto. `None` = el normal, o el que la partida
+    /// ya tuviera. El mayoreo nunca se aplica solo: solo se sugiere (ver [`Partida::sugerencia`]).
     pub fn agregar(
         &mut self,
         venta_id: i64,
@@ -455,14 +466,15 @@ pub(crate) fn poner_cantidad(
     if !producto.activo {
         return Err(Error::invalido(format!("{} está desactivado.", producto.nombre)));
     }
-    let fijo: Option<Dinero> = conn
+    // El precio no cambia solo con la cantidad: es el que ya llevaba, o el normal si es nueva.
+    let anterior: Option<Dinero> = conn
         .query_row(
-            "SELECT precio FROM partidas WHERE venta_id = ?1 AND producto_id = ?2 AND precio_fijo",
+            "SELECT precio FROM partidas WHERE venta_id = ?1 AND producto_id = ?2",
             [venta_id, producto_id],
             |f| f.get(0),
         )
         .optional()?;
-    let precio = fijo.unwrap_or_else(|| producto.precio_para(cantidad));
+    let precio = anterior.unwrap_or(producto.precio);
     let id = conn.query_row(
         "INSERT INTO partidas (venta_id, producto_id, descripcion, unidad, cantidad, precio, costo, importe)
          VALUES (:venta_id, :producto_id, :descripcion, :unidad, :cantidad, :precio, :costo, :importe)
@@ -536,12 +548,31 @@ pub(crate) fn cargar(conn: &Connection, id: i64) -> Resultado<Venta> {
          WHERE pa.venta_id = ?1 ORDER BY pa.id",
     )?;
     venta.partidas = partidas.query_map([id], Partida::de_fila)?.collect::<rusqlite::Result<_>>()?;
+    if venta.estado == Estado::Abierta {
+        for partida in &mut venta.partidas {
+            partida.sugerencia = sugerencia(conn, partida)?;
+        }
+    }
 
     let mut pagos = conn.prepare_cached("SELECT metodo, recibido, monto FROM pagos WHERE venta_id = ?1 ORDER BY id")?;
     venta.pagos = pagos
         .query_map([id], |f| Ok(Aplicado { metodo: f.get(0)?, recibido: f.get(1)?, monto: f.get(2)? }))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(venta)
+}
+
+/// El mayoreo que alcanza la cantidad de la partida, si no es ya el precio que lleva.
+fn sugerencia(conn: &Connection, partida: &Partida) -> Resultado<Option<Sugerencia>> {
+    let precios = catalogo::otros_precios(conn, partida.producto_id)?;
+    let alcanzado = precios
+        .iter()
+        .filter(|p| p.cantidad_minima.is_some_and(|minima| minima <= partida.cantidad))
+        .max_by_key(|p| p.cantidad_minima);
+    Ok(alcanzado.filter(|p| p.precio != partida.precio).map(|p| Sugerencia {
+        precio_id: p.id,
+        nombre: p.nombre.clone(),
+        precio: p.precio,
+    }))
 }
 
 pub(crate) fn cargar_varias(
@@ -643,14 +674,25 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn el_precio_sigue_a_la_cantidad_hasta_fijarlo() {
+    fn el_mayoreo_se_sugiere_pero_no_se_aplica_solo() {
         let mut t = Tienda::nueva();
         let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
         let precio = |v: Venta| v.partidas[0].precio;
 
-        let partida = t.bd.agregar(id, t.tornillo.id, c("9"), None).unwrap().partidas[0].id;
-        assert_eq!(precio(t.bd.venta(id).unwrap()), d("1"));
-        assert_eq!(precio(t.bd.agregar(id, t.tornillo.id, Cantidad::UNO, None).unwrap()), d("0.80"));
+        let venta = t.bd.agregar(id, t.tornillo.id, c("9"), None).unwrap();
+        let partida = venta.partidas[0].id;
+        assert_eq!((venta.partidas[0].precio, venta.partidas[0].sugerencia.clone()), (d("1"), None));
+
+        // Al llegar a 10 se sugiere el mayoreo, pero el precio sigue siendo el normal.
+        let venta = t.bd.agregar(id, t.tornillo.id, Cantidad::UNO, None).unwrap();
+        assert_eq!(precio(venta.clone()), d("1"));
+        let sugerencia = venta.partidas[0].sugerencia.clone().unwrap();
+        assert_eq!((sugerencia.nombre.as_str(), sugerencia.precio), ("Mayoreo", d("0.80")));
+
+        // Si el cajero lo toma, ya no se sugiere nada.
+        let venta = t.bd.elegir_precio(id, partida, Some(sugerencia.precio_id)).unwrap();
+        assert_eq!((precio(venta.clone()), venta.partidas[0].sugerencia.clone()), (d("0.80"), None));
+        assert!(t.bd.venta(id).unwrap().partidas[0].sugerencia.is_none());
 
         let contratista = t.tornillo.precios.iter().find(|p| p.nombre == "Contratista").unwrap().id;
         let venta = t.bd.elegir_precio(id, partida, Some(contratista)).unwrap();

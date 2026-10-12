@@ -45,6 +45,7 @@ export struct PartidaUi {
     devuelto: string,
     pendiente: string,  // lo que aún se puede devolver
     a-devolver: string, // lo que se está capturando en una devolución
+    sugerencia: string, // «Mayoreo $1.25» si la cantidad ya alcanza otro precio
 }
 
 export struct FilaUi {
@@ -216,6 +217,7 @@ export global Api {
     in property <bool> pide-peso;
     in property <ProductoUi> producto-pendiente;
     in property <[PrecioUi]> opciones-precio;
+    in property <int> precio-sugerido;            // la opción que se propone (la cantidad alcanza ese mayoreo)
     in property <bool> mostrando-cobrada;
     in property <VentaUi> cobrada;
     in property <string> cambio;

@@ -34,8 +34,9 @@ jobs:
       matrix:
         include:
           - { sistema: windows-latest, objetivo: x86_64-pc-windows-msvc, formatos: nsis, nombre: Windows }
-          - { sistema: macos-latest, objetivo: aarch64-apple-darwin, formatos: dmg, nombre: macOS-AppleSilicon }
-          - { sistema: macos-latest, objetivo: x86_64-apple-darwin, formatos: dmg, nombre: macOS-Intel }
+          # En macOS se genera la .app, se firma completa y el .dmg se arma aparte (ver abajo).
+          - { sistema: macos-latest, objetivo: aarch64-apple-darwin, formatos: app, nombre: macOS-AppleSilicon }
+          - { sistema: macos-latest, objetivo: x86_64-apple-darwin, formatos: app, nombre: macOS-Intel }
           - { sistema: ubuntu-22.04, objetivo: x86_64-unknown-linux-gnu, formatos: "deb,appimage", nombre: Linux }
     runs-on: ${{ matrix.sistema }}
     steps:
@@ -53,6 +54,20 @@ jobs:
         run: |
           cargo build --release -p punto-venta --target ${{ matrix.objetivo }}
           cargo packager --release --target ${{ matrix.objetivo }} --formats ${{ matrix.formatos }}
+      # Sin firma de la .app completa, macOS dice que la app «está dañada» al bajarla de internet.
+      # Una firma ad hoc (sin cuenta de Apple Developer) basta para que se pueda abrir con
+      # «Abrir de todas formas»; para que abra sin avisos haría falta firmar y notarizar con Apple.
+      - name: Firmar la app y armar el .dmg
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app="target/instaladores/Punto de Venta.app"
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p dmg && cp -R "$app" dmg/ && ln -s /Applications dmg/Applications
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          hdiutil create -volname "Punto de Venta" -srcfolder dmg -ov -format UDZO \
+            "target/instaladores/Punto de Venta_${version}_${{ matrix.nombre }}.dmg"
       - uses: actions/upload-artifact@v4
         with:
           name: instalador-${{ matrix.nombre }}

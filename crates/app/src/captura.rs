@@ -187,6 +187,7 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     let martillo =
         bd.crear_producto(&producto("7501234567890", "Martillo de uña 16 oz", herramientas, "189", false, "pza"))?;
     let mut tornillo = producto("TOR-832", "Tornillo para madera 8 × 1¼\"", tornilleria, "1.50", false, "pza");
+    tornillo.codigo_barras = "7501206609026".into();
     tornillo.precios = vec![
         OtroPrecio { id: 0, nombre: "Mayoreo".into(), precio: d("1.25"), cantidad_minima: Some(c("100")) },
         OtroPrecio { id: 0, nombre: "Contratista".into(), precio: d("1.10"), cantidad_minima: None },

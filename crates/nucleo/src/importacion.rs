@@ -1,8 +1,8 @@
 //! Alta y actualización de productos desde una hoja de Excel, con vista previa.
 //!
 //! La primera fila con contenido son los encabezados; se reconocen por nombre en cualquier orden
-//! («Código», «Descripción», «Precio venta»…). Solo el código es obligatorio: lo que no venga en la hoja
-//! no se toca.
+//! («Código», «Código de barras», «Descripción», «Precio venta»…); las demás columnas (p. ej. «Impuesto») se
+//! ignoran. Solo el código es obligatorio: lo que no venga en la hoja no se toca.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -19,6 +19,7 @@ use crate::{Bd, Cantidad, Dinero, Error, Resultado};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Columna {
     Codigo,
+    CodigoBarras,
     Nombre,
     Familia,
     Precio,
@@ -32,11 +33,36 @@ impl Columna {
     fn reconocer(encabezado: &str) -> Option<Self> {
         let encabezado = normalizar(encabezado);
         let alias: &[(&[&str], Self)] = &[
-            (&["codigo", "clave", "codigo de barras", "barras", "sku", "cod"], Self::Codigo),
+            (
+                &[
+                    "codigo",
+                    "clave",
+                    "sku",
+                    "cod",
+                    "codigo del producto",
+                    "codigo de producto",
+                    "codigo producto",
+                    "clave del producto",
+                    "codigo interno",
+                ],
+                Self::Codigo,
+            ),
+            (&["codigo de barras", "codigo barras", "barras", "ean", "upc"], Self::CodigoBarras),
             (&["nombre", "descripcion", "producto", "articulo"], Self::Nombre),
             (&["familia", "departamento", "categoria", "linea"], Self::Familia),
             (&["precio", "precio venta", "precio de venta", "precio publico", "p. venta", "pventa"], Self::Precio),
-            (&["costo", "precio compra", "precio de compra", "costo unitario", "p. compra"], Self::Costo),
+            (
+                &[
+                    "costo",
+                    "precio compra",
+                    "precio de compra",
+                    "costo unitario",
+                    "p. compra",
+                    "costo ultimo",
+                    "ultimo costo",
+                ],
+                Self::Costo,
+            ),
             (&["existencia", "existencias", "stock", "inventario", "cantidad"], Self::Existencia),
             (&["unidad", "unidad de medida", "um"], Self::Unidad),
             (&["a granel", "granel", "venta a granel", "por kilo"], Self::Granel),
@@ -49,6 +75,7 @@ impl Columna {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Datos {
     pub codigo: String,
+    pub codigo_barras: Option<String>,
     pub nombre: Option<String>,
     pub familia: Option<String>,
     pub precio: Option<Dinero>,
@@ -114,12 +141,18 @@ pub fn leer_tabla<'a>(filas: impl IntoIterator<Item = &'a [Data]>, desplazamient
     let Some((_, encabezados)) = filas.next() else {
         return Err(Error::Excel("La hoja está vacía.".into()));
     };
-    let columnas: HashMap<Columna, usize> = encabezados
+    let mut columnas: HashMap<Columna, usize> = encabezados
         .iter()
         .enumerate()
         .filter_map(|(i, celda)| Some((Columna::reconocer(&texto(celda))?, i)))
         .rev() // si una columna se repite, gana la primera
         .collect();
+    // Una hoja con solo «Código de barras» lo usa como código del producto.
+    if !columnas.contains_key(&Columna::Codigo)
+        && let Some(barras) = columnas.remove(&Columna::CodigoBarras)
+    {
+        columnas.insert(Columna::Codigo, barras);
+    }
     if !columnas.contains_key(&Columna::Codigo) {
         let vistos: Vec<String> = encabezados.iter().map(texto).filter(|t| !t.is_empty()).collect();
         return Err(Error::Excel(format!(
@@ -141,8 +174,12 @@ fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data) -> Result<Datos, String> 
     if codigo.is_empty() {
         return Err("Falta el código.".into());
     }
-    let opcional = |columna| Some(texto(celda(columna))).filter(|t| !t.is_empty());
+    // Los espacios de más (o «duros», como los que deja copiar de una página) se quitan.
+    let opcional = |columna| {
+        Some(texto(celda(columna)).split_whitespace().collect::<Vec<_>>().join(" ")).filter(|t| !t.is_empty())
+    };
     Ok(Datos {
+        codigo_barras: opcional(Columna::CodigoBarras).filter(|b| !b.eq_ignore_ascii_case(&codigo)),
         codigo,
         nombre: opcional(Columna::Nombre),
         familia: opcional(Columna::Familia),
@@ -150,9 +187,17 @@ fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data) -> Result<Datos, String> 
         costo: numero(celda(Columna::Costo), Dinero::redondeando).map_err(|e| format!("Costo: {e}"))?,
         existencia: numero(celda(Columna::Existencia), Cantidad::redondeando)
             .map_err(|e| format!("Existencia: {e}"))?,
-        unidad: opcional(Columna::Unidad),
+        unidad: opcional(Columna::Unidad).map(unidad),
         granel: si_o_no(celda(Columna::Granel)).map_err(|e| format!("A granel: {e}"))?,
     })
+}
+
+/// «PIEZA», «Pzas»… → «pza», como la usa la app; cualquier otra se queda como viene.
+fn unidad(unidad: String) -> String {
+    match normalizar(&unidad).trim_end_matches('.') {
+        "pieza" | "piezas" | "pza" | "pzas" | "pz" | "pzs" => "pza".into(),
+        _ => unidad,
+    }
 }
 
 /// «Sí», «x», «1», «granel»… → sí; «No», «0», vacío… → no.
@@ -212,16 +257,24 @@ impl Bd {
 
 fn planear(conn: &Connection, renglones: &[Renglon]) -> Resultado<Vista> {
     let mut vista = Vista::default();
-    let mut vistos: HashMap<String, usize> = HashMap::new();
+    let mut vistos = Vistos::new();
     for renglon in renglones {
         let (codigo, nombre, accion) = match &renglon.datos {
             Err(mensaje) => (String::new(), String::new(), Accion::Error { mensaje: mensaje.clone() }),
             Ok(datos) => {
                 let existente = buscar(conn, &datos.codigo)?;
-                let accion = match vistos.insert(datos.codigo.to_lowercase(), renglon.numero) {
-                    Some(anterior) => {
-                        Accion::Error { mensaje: format!("Código repetido: ya viene en el renglón {anterior}.") }
+                let choque = match repetido(&vistos, datos) {
+                    Some(mensaje) => Some(mensaje),
+                    None => ocupado(conn, datos, existente.as_ref())?,
+                };
+                // Un renglón que se salta no aparta sus códigos: el que sí entra los puede usar.
+                if choque.is_none() {
+                    for (clave, es_barras) in claves(datos) {
+                        vistos.insert(clave.to_lowercase(), (renglon.numero, es_barras));
                     }
+                }
+                let accion = match choque {
+                    Some(mensaje) => Accion::Error { mensaje },
                     None => accion(datos, existente.as_ref()),
                 };
                 let nombre = datos.nombre.clone().or(existente.map(|p| p.nombre)).unwrap_or_default();
@@ -239,6 +292,43 @@ fn planear(conn: &Connection, renglones: &[Renglon]) -> Resultado<Vista> {
     Ok(vista)
 }
 
+/// Código o código de barras (en minúsculas) → el renglón donde apareció y si ahí era código de barras.
+type Vistos = HashMap<String, (usize, bool)>;
+
+/// El código del renglón y, si trae, su código de barras (`true`).
+fn claves(datos: &Datos) -> impl Iterator<Item = (&String, bool)> {
+    [Some((&datos.codigo, false)), datos.codigo_barras.as_ref().map(|b| (b, true))].into_iter().flatten()
+}
+
+/// Cada código y código de barras puede venir una sola vez en la hoja, en cualquiera de las dos columnas.
+fn repetido(vistos: &Vistos, datos: &Datos) -> Option<String> {
+    claves(datos).find_map(|(clave, es_barras)| {
+        let &(n, era_barras) = vistos.get(&clave.to_lowercase())?;
+        Some(match (era_barras, es_barras) {
+            (false, false) => format!("Código repetido: ya viene en el renglón {n}."),
+            (true, true) => format!("Código de barras repetido: ya viene en el renglón {n}."),
+            (false, true) => format!("El código de barras {clave} ya viene como código en el renglón {n}."),
+            (true, false) => format!("El código {clave} ya viene como código de barras en el renglón {n}."),
+        })
+    })
+}
+
+/// Lo que ya está en la base: el código de barras no puede ser de otro producto, ni un código nuevo ser el
+/// código de barras de alguien más.
+fn ocupado(conn: &Connection, datos: &Datos, existente: Option<&Producto>) -> Resultado<Option<String>> {
+    if existente.is_none()
+        && let Some(otro) = catalogo::quien_usa(conn, &datos.codigo, None)?
+    {
+        return Ok(Some(format!("El código {} ya es el código de barras de «{otro}».", datos.codigo)));
+    }
+    if let Some(barras) = &datos.codigo_barras
+        && let Some(otro) = catalogo::quien_usa(conn, barras, existente.map(|p| p.id))?
+    {
+        return Ok(Some(format!("El código de barras {barras} ya lo usa «{otro}».")));
+    }
+    Ok(None)
+}
+
 fn accion(datos: &Datos, existente: Option<&Producto>) -> Accion {
     let Some(actual) = existente else {
         return match (&datos.nombre, datos.precio) {
@@ -254,6 +344,7 @@ fn accion(datos: &Datos, existente: Option<&Producto>) -> Accion {
             cambios.push(format!("{campo}: {antes} → {despues}"));
         }
     };
+    comparar("Código de barras", actual.codigo_barras.clone().unwrap_or_default(), datos.codigo_barras.clone());
     comparar("Nombre", actual.nombre.clone(), datos.nombre.clone());
     comparar("Familia", actual.familia.clone().unwrap_or_default(), datos.familia.clone());
     comparar("Precio", actual.precio.pesos(), datos.precio.map(Dinero::pesos));
@@ -278,6 +369,7 @@ fn aplicar(conn: &Connection, datos: &Datos) -> Resultado<()> {
     let familia_id = datos.familia.as_deref().map(|f| catalogo::familia_por_nombre(conn, f)).transpose()?;
     let parametros = named_params! {
         ":codigo": datos.codigo,
+        ":codigo_barras": datos.codigo_barras,
         ":nombre": datos.nombre,
         ":familia_id": familia_id,
         ":precio": datos.precio,
@@ -286,7 +378,8 @@ fn aplicar(conn: &Connection, datos: &Datos) -> Resultado<()> {
         ":granel": datos.granel,
     };
     let actualizados = conn.execute(
-        "UPDATE productos SET nombre = coalesce(:nombre, nombre), familia_id = coalesce(:familia_id, familia_id),
+        "UPDATE productos SET codigo_barras = coalesce(:codigo_barras, codigo_barras),
+                              nombre = coalesce(:nombre, nombre), familia_id = coalesce(:familia_id, familia_id),
                               precio = coalesce(:precio, precio), costo = coalesce(:costo, costo),
                               granel = coalesce(:granel, granel),
                               unidad = CASE WHEN coalesce(:granel, granel) THEN 'kg' ELSE coalesce(:unidad, unidad) END
@@ -295,8 +388,8 @@ fn aplicar(conn: &Connection, datos: &Datos) -> Resultado<()> {
     )?;
     if actualizados == 0 {
         conn.execute(
-            "INSERT INTO productos (codigo, nombre, familia_id, precio, costo, granel, unidad)
-             VALUES (:codigo, :nombre, :familia_id, :precio, coalesce(:costo, 0), coalesce(:granel, 0),
+            "INSERT INTO productos (codigo, codigo_barras, nombre, familia_id, precio, costo, granel, unidad)
+             VALUES (:codigo, :codigo_barras, :nombre, :familia_id, :precio, coalesce(:costo, 0), coalesce(:granel, 0),
                      CASE WHEN :granel THEN 'kg' ELSE coalesce(:unidad, 'pza') END)",
             parametros,
         )?;
@@ -316,6 +409,7 @@ fn aplicar(conn: &Connection, datos: &Datos) -> Resultado<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::catalogo::DatosProducto;
     use crate::catalogo::tests::{c, d, datos};
 
     fn s(texto: &str) -> Data {
@@ -398,6 +492,126 @@ mod tests {
     }
 
     #[test]
+    fn plantilla_con_codigo_del_producto_y_de_barras() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let encabezados = [
+            "Código del producto",
+            "Código de barras",
+            "Descripción",
+            "Precio de venta",
+            "Costo ultimo",
+            "Existencia",
+            "Impuesto",
+            "Unidad",
+        ];
+        let renglones = tabla(vec![
+            encabezados.iter().map(|e| s(e)).collect(),
+            vec![
+                Data::Float(10254.0),
+                s("7501206654088"),
+                s("Arco jardinero tubular, 21\""),
+                Data::Float(145.0),
+                Data::Empty,
+                Data::Float(3.0),
+                s("SYS"),
+                s("PIEZA"),
+            ],
+            vec![
+                Data::Float(11004.0),
+                Data::Empty,
+                s("  Sierra circular,\u{a0}1500 w  "),
+                Data::Float(1875.0),
+                Data::Float(1200.0),
+                Data::Float(1.0),
+                s("SYS"),
+                s("PIEZA"),
+            ],
+            vec![Data::Float(7.0), s("7"), s("Caja"), Data::Float(1.0), Data::Empty, Data::Empty, s("SYS"), s("CAJA")],
+        ]);
+        let arco = renglones[0].datos.as_ref().unwrap();
+        assert_eq!(
+            arco,
+            &Datos {
+                codigo: "10254".into(),
+                codigo_barras: Some("7501206654088".into()),
+                nombre: Some("Arco jardinero tubular, 21\"".into()),
+                precio: Some(d("145")),
+                existencia: Some(c("3")),
+                unidad: Some("pza".into()),
+                ..Default::default()
+            }
+        );
+        let sierra = renglones[1].datos.as_ref().unwrap();
+        assert_eq!(
+            (sierra.codigo_barras.as_deref(), sierra.nombre.as_deref()),
+            (None, Some("Sierra circular, 1500 w"))
+        );
+        assert_eq!(sierra.costo, Some(d("1200")));
+        let caja = renglones[2].datos.as_ref().unwrap();
+        assert_eq!((caja.codigo_barras.as_deref(), caja.unidad.as_deref()), (None, Some("CAJA"))); // igual al código
+
+        assert_eq!(bd.importar(&renglones).unwrap().crear, 3);
+        let por_barras = bd.producto_por_codigo("7501206654088").unwrap().unwrap();
+        assert_eq!((por_barras.codigo.as_str(), por_barras.unidad.as_str()), ("10254", "pza"));
+        assert_eq!(bd.previsualizar_importacion(&renglones).unwrap().sin_cambios, 3);
+    }
+
+    #[test]
+    fn sin_columna_codigo_usa_el_de_barras() {
+        let renglones = tabla(vec![vec![s("Código de barras"), s("Nombre")], vec![s("750"), s("Martillo")]]);
+        let martillo = renglones[0].datos.as_ref().unwrap();
+        assert_eq!((martillo.codigo.as_str(), martillo.codigo_barras.as_deref()), ("750", None));
+    }
+
+    #[test]
+    fn codigos_y_codigos_de_barras_no_chocan() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let ya = DatosProducto { codigo_barras: "750-YA".into(), ..datos("YA", "Ya existía", "1", "1") };
+        bd.crear_producto(&ya).unwrap();
+
+        let fila = |codigo: &str, barras: &str| {
+            vec![s(codigo), if barras.is_empty() { Data::Empty } else { s(barras) }, s("Algo"), Data::Float(1.0)]
+        };
+        let renglones = tabla(vec![
+            vec![s("Código"), s("Código de barras"), s("Nombre"), s("Precio")],
+            fila("17054", "750-NIVEL"),       // 2
+            fila("750-NIVEL", "750-MEDIDOR"), // 3: su código es el de barras del renglón 2
+            fila("48088", "750-PLACA"),       // 4
+            fila("48090", "750-PLACA"),       // 5: mismo código de barras
+            fila("1", "17054"),               // 6: su código de barras es el código del renglón 2
+            fila("2", "750-YA"),              // 7: ya lo usa un producto de la base
+            fila("750-YA", ""),               // 8: es el código de barras de uno de la base
+            fila("YA", "750-YA"),             // 9: el mismo producto; su código de barras sigue siendo suyo
+        ]);
+        let vista = bd.previsualizar_importacion(&renglones).unwrap();
+        let mensajes: Vec<_> = vista
+            .filas
+            .iter()
+            .map(|f| match &f.accion {
+                Accion::Error { mensaje } => mensaje.as_str(),
+                Accion::Crear => "crear",
+                _ => "otro",
+            })
+            .collect();
+        assert_eq!(
+            mensajes,
+            [
+                "crear",
+                "El código 750-NIVEL ya viene como código de barras en el renglón 2.",
+                "crear",
+                "Código de barras repetido: ya viene en el renglón 4.",
+                "El código de barras 17054 ya viene como código en el renglón 2.",
+                "El código de barras 750-YA ya lo usa «Ya existía».",
+                "El código 750-YA ya es el código de barras de «Ya existía».",
+                "otro",
+            ]
+        );
+        assert_eq!(vista.filas[7].accion, Accion::Actualizar { cambios: vec!["Nombre: Ya existía → Algo".into()] });
+        let hecho = bd.importar(&renglones).unwrap();
+        assert_eq!((hecho.crear, hecho.actualizar, hecho.errores), (2, 1, 5));
+    }
+
+    #[test]
     fn importa_venta_a_granel() {
         let mut bd = Bd::en_memoria().unwrap();
         let renglones = tabla(vec![
@@ -416,9 +630,13 @@ mod tests {
     #[test]
     fn lo_exportado_se_vuelve_a_importar_igual() {
         let mut bd = Bd::en_memoria().unwrap();
-        let martillo = bd.crear_producto(&datos("007", "Martillo", "116.5", "70")).unwrap();
-        bd.crear_producto(&crate::catalogo::DatosProducto { granel: true, ..datos("CLA", "Clavo", "48", "30") })
+        let martillo = bd
+            .crear_producto(&DatosProducto {
+                codigo_barras: "0750123".into(),
+                ..datos("007", "Martillo", "116.5", "70")
+            })
             .unwrap();
+        bd.crear_producto(&DatosProducto { granel: true, ..datos("CLA", "Clavo", "48", "30") }).unwrap();
         bd.registrar_entrada(martillo.id, c("2.5"), "").unwrap();
         let productos = bd.buscar_productos("", false, 100).unwrap();
 
@@ -429,6 +647,7 @@ mod tests {
         let renglones = leer_excel(&ruta).unwrap();
         let leido = renglones.iter().find_map(|r| r.datos.as_ref().ok().filter(|d| d.codigo == "007")).unwrap();
         assert_eq!((leido.codigo.as_str(), leido.precio, leido.existencia), ("007", Some(d("116.5")), Some(c("2.5"))));
+        assert_eq!(leido.codigo_barras.as_deref(), Some("0750123"));
         assert_eq!(bd.previsualizar_importacion(&renglones).unwrap().sin_cambios, 2);
     }
 }

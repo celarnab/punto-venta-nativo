@@ -41,6 +41,8 @@ pub struct OtroPrecio {
 pub struct Producto {
     pub id: i64,
     pub codigo: String,
+    /// Opcional; el escáner y la búsqueda también lo encuentran por él.
+    pub codigo_barras: Option<String>,
     pub nombre: String,
     pub familia_id: Option<i64>,
     pub familia: Option<String>,
@@ -89,6 +91,7 @@ impl Producto {
         Ok(Self {
             id: fila.get("id")?,
             codigo: fila.get("codigo")?,
+            codigo_barras: fila.get("codigo_barras")?,
             nombre: fila.get("nombre")?,
             familia_id: fila.get("familia_id")?,
             familia: fila.get("familia")?,
@@ -111,6 +114,9 @@ impl Producto {
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct DatosProducto {
     pub codigo: String,
+    /// Vacío = sin código de barras.
+    #[serde(default)]
+    pub codigo_barras: String,
     pub nombre: String,
     pub familia_id: Option<i64>,
     pub precio: Dinero,
@@ -159,6 +165,10 @@ impl DatosProducto {
         Ok(())
     }
 
+    fn codigo_barras(&self) -> Option<&str> {
+        Some(self.codigo_barras.trim()).filter(|b| !b.is_empty() && !b.eq_ignore_ascii_case(self.codigo.trim()))
+    }
+
     fn unidad(&self) -> &str {
         match self.unidad.trim() {
             _ if self.granel => "kg",
@@ -170,11 +180,20 @@ impl DatosProducto {
     /// Inserta (`id` = `None`) o actualiza el producto según `sql`.
     fn guardar(&self, conn: &Connection, sql: &str, id: Option<i64>) -> Resultado<usize> {
         let codigo = self.codigo.trim();
+        let barras = self.codigo_barras();
+        for (campo, clave) in [("código", Some(codigo)), ("código de barras", barras)] {
+            if let Some(clave) = clave
+                && let Some(otro) = quien_usa(conn, clave, id)?
+            {
+                return Err(Error::invalido(format!("El {campo} {clave} ya lo usa «{otro}».")));
+            }
+        }
         conn.execute(
             sql,
             named_params! {
                 ":id": id,
                 ":codigo": codigo,
+                ":codigo_barras": barras,
                 ":nombre": self.nombre.trim(),
                 ":familia_id": self.familia_id,
                 ":precio": self.precio,
@@ -257,7 +276,7 @@ impl Bd {
 
     // — Productos —
 
-    /// Cada palabra debe aparecer en el código, el nombre o la familia, sin importar acentos.
+    /// Cada palabra debe aparecer en el código, el código de barras, el nombre o la familia, sin importar acentos.
     /// Un código idéntico (lo que manda el escáner) sale primero.
     pub fn buscar_productos(&self, consulta: &str, solo_activos: bool, limite: usize) -> Resultado<Vec<Producto>> {
         let sql = format!(
@@ -265,10 +284,11 @@ impl Bd {
                AND (p.activo OR NOT :solo_activos)
                AND NOT EXISTS (
                    SELECT 1 FROM json_each(:palabras) palabra
-                   WHERE instr(normalizar(p.codigo || ' ' || p.nombre || ' ' || coalesce(f.nombre, '')),
+                   WHERE instr(normalizar(p.codigo || ' ' || coalesce(p.codigo_barras, '') || ' ' || p.nombre
+                                         || ' ' || coalesce(f.nombre, '')),
                                palabra.value) = 0
                )
-             ORDER BY p.codigo = :consulta DESC, p.nombre
+             ORDER BY p.codigo = :consulta OR coalesce(p.codigo_barras = :consulta, 0) DESC, p.nombre
              LIMIT :limite"
         );
         let parametros = named_params! {
@@ -284,9 +304,10 @@ impl Bd {
         cargar(self.conn(), id)
     }
 
-    /// Lo que manda el escáner de código de barras.
+    /// Lo que manda el escáner: el código del producto o su código de barras.
     pub fn producto_por_codigo(&self, codigo: &str) -> Resultado<Option<Producto>> {
-        let sql = format!("{SELECCION} AND p.codigo = ?1");
+        // Si (por datos viejos) uno tuviera de código el código de barras de otro, gana el código: va al final.
+        let sql = format!("{SELECCION} AND (p.codigo = ?1 OR p.codigo_barras = ?1) ORDER BY p.codigo = ?1");
         Ok(consultar(self.conn(), &sql, [codigo.trim()])?.pop())
     }
 
@@ -295,10 +316,10 @@ impl Bd {
         self.transaccion(|tx| {
             datos.guardar(
                 tx,
-                "INSERT INTO productos (id, codigo, nombre, familia_id, precio, costo, stock_minimo, stock_maximo,
-                                        alerta_stock, activo, granel, unidad)
-                 VALUES (:id, :codigo, :nombre, :familia_id, :precio, :costo, :stock_minimo, :stock_maximo,
-                         :alerta_stock, :activo, :granel, :unidad)",
+                "INSERT INTO productos (id, codigo, codigo_barras, nombre, familia_id, precio, costo, stock_minimo,
+                                        stock_maximo, alerta_stock, activo, granel, unidad)
+                 VALUES (:id, :codigo, :codigo_barras, :nombre, :familia_id, :precio, :costo, :stock_minimo,
+                         :stock_maximo, :alerta_stock, :activo, :granel, :unidad)",
                 None,
             )?;
             let id = tx.last_insert_rowid();
@@ -313,7 +334,7 @@ impl Bd {
             let cambiados = datos.guardar(
                 tx,
                 "UPDATE productos
-                 SET codigo = :codigo, nombre = :nombre, familia_id = :familia_id, precio = :precio, costo = :costo,
+                 SET codigo = :codigo, codigo_barras = :codigo_barras, nombre = :nombre, familia_id = :familia_id, precio = :precio, costo = :costo,
                      stock_minimo = :stock_minimo, stock_maximo = :stock_maximo, alerta_stock = :alerta_stock,
                      activo = :activo, granel = :granel, unidad = :unidad
                  WHERE id = :id AND borrado_en IS NULL",
@@ -441,6 +462,20 @@ fn nombre_de_familia(datos: &DatosFamilia) -> Resultado<&str> {
     }
 }
 
+/// El nombre del producto (otro que `excepto`) que ya usa `clave` como código o como código de barras:
+/// cada uno identifica a un solo producto, para que el escáner no tenga dudas.
+pub(crate) fn quien_usa(conn: &Connection, clave: &str, excepto: Option<i64>) -> Resultado<Option<String>> {
+    let nombre = conn
+        .query_row(
+            "SELECT nombre FROM productos
+             WHERE borrado_en IS NULL AND id IS NOT ?2 AND (codigo = ?1 OR codigo_barras = ?1)",
+            params![clave.trim(), excepto],
+            |f| f.get(0),
+        )
+        .optional()?;
+    Ok(nombre)
+}
+
 fn consultar(conn: &Connection, sql: &str, parametros: impl rusqlite::Params) -> Resultado<Vec<Producto>> {
     let mut consulta = conn.prepare(sql)?;
     let mut productos: Vec<Producto> =
@@ -544,7 +579,7 @@ pub(crate) mod tests {
         let mut bd = Bd::en_memoria().unwrap();
         bd.crear_producto(&datos("A1", "Martillo", "100", "60")).unwrap();
         let error = bd.crear_producto(&datos("a1", "Otro", "1", "1")).unwrap_err();
-        assert_eq!(error.to_string(), "Ya existe un producto con el código a1.");
+        assert_eq!(error.to_string(), "El código a1 ya lo usa «Martillo».");
 
         let invertido =
             DatosProducto { stock_minimo: Some(c("10")), stock_maximo: Some(c("5")), ..datos("B", "B", "1", "1") };
@@ -622,6 +657,61 @@ pub(crate) mod tests {
         assert!(bd.borrar_producto(martillo.id).is_err());
         assert_eq!(bd.movimientos(martillo.id, 10).unwrap().len(), 1);
         bd.crear_producto(&datos("MAR", "Martillo nuevo", "120", "70")).unwrap(); // el código quedó libre
+    }
+
+    #[test]
+    fn el_escaner_encuentra_por_codigo_de_barras() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let con_barras =
+            DatosProducto { codigo_barras: " 7501206654088 ".into(), ..datos("10254", "Arco", "145", "0") };
+        let arco = bd.crear_producto(&con_barras).unwrap();
+        assert_eq!(arco.codigo_barras.as_deref(), Some("7501206654088"));
+        bd.crear_producto(&datos("Z1", "Zapapico", "300", "200")).unwrap();
+
+        assert_eq!(bd.producto_por_codigo("7501206654088").unwrap().unwrap().id, arco.id);
+        assert_eq!(bd.producto_por_codigo("10254").unwrap().unwrap().id, arco.id);
+        assert_eq!(nombres(&bd.buscar_productos("6654088", true, 10).unwrap()), ["Arco"]);
+        assert_eq!(nombres(&bd.buscar_productos("7501206654088", true, 10).unwrap()), ["Arco"]);
+        // sin código de barras no estorba el orden alfabético
+        assert_eq!(nombres(&bd.buscar_productos("", true, 10).unwrap()), ["Arco", "Zapapico"]);
+
+        // vacío o igual al código = sin código de barras; se puede quitar al editar
+        let igual = DatosProducto { codigo_barras: "a7".into(), ..datos("A7", "Otro", "1", "1") };
+        assert_eq!(bd.crear_producto(&igual).unwrap().codigo_barras, None);
+        let sin = bd.actualizar_producto(arco.id, &datos("10254", "Arco", "145", "0")).unwrap();
+        assert_eq!(sin.codigo_barras, None);
+        assert!(bd.producto_por_codigo("7501206654088").unwrap().is_none());
+    }
+
+    #[test]
+    fn un_codigo_identifica_a_un_solo_producto() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let arco = DatosProducto { codigo_barras: "750A".into(), ..datos("10254", "Arco", "145", "0") };
+        let arco = bd.crear_producto(&arco).unwrap();
+
+        let mismo_barras = DatosProducto { codigo_barras: "750a".into(), ..datos("2", "Placa", "1", "1") };
+        assert_eq!(
+            bd.crear_producto(&mismo_barras).unwrap_err().to_string(),
+            "El código de barras 750a ya lo usa «Arco»."
+        );
+        let barras_es_codigo = DatosProducto { codigo_barras: "10254".into(), ..datos("3", "Placa", "1", "1") };
+        assert_eq!(
+            bd.crear_producto(&barras_es_codigo).unwrap_err().to_string(),
+            "El código de barras 10254 ya lo usa «Arco»."
+        );
+        assert_eq!(
+            bd.crear_producto(&datos("750A", "Medidor", "1", "1")).unwrap_err().to_string(),
+            "El código 750A ya lo usa «Arco»."
+        );
+
+        // editarse a sí mismo no choca; al borrarlo, sus códigos quedan libres
+        bd.actualizar_producto(
+            arco.id,
+            &DatosProducto { codigo_barras: "750A".into(), ..datos("10254", "Arco", "150", "0") },
+        )
+        .unwrap();
+        bd.borrar_producto(arco.id).unwrap();
+        bd.crear_producto(&mismo_barras).unwrap();
     }
 
     #[test]

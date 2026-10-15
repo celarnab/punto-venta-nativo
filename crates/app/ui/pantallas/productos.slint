@@ -21,7 +21,8 @@ component EditorProducto inherits Dialogo {
             spacing: 8px;
             HorizontalLayout {
                 spacing: 10px;
-                codigo := Campo { etiqueta: "Código / código de barras"; text: Api.editor.codigo; width: 190px; init => { if Api.editor.id == 0 { self.enfocar(); } } }
+                codigo := Campo { etiqueta: "Código"; text: Api.editor.codigo; width: 130px; init => { if Api.editor.id == 0 { self.enfocar(); } } }
+                codigo-barras := Campo { etiqueta: "Código de barras"; text: Api.editor.codigo-barras; width: 160px; placeholder: "Opcional"; }
                 nombre := Campo { etiqueta: "Nombre"; text: Api.editor.nombre; }
             }
             HorizontalLayout {
@@ -159,6 +160,7 @@ component EditorProducto inherits Dialogo {
                 error = Api.guardar-producto({
                     id: Api.editor.id,
                     codigo: codigo.text,
+                    codigo-barras: codigo-barras.text,
                     nombre: nombre.text,
                     familia-indice: familia,
                     granel: granel,
@@ -249,7 +251,7 @@ export component Productos inherits Rectangle {
             spacing: 14px;
             consulta := LineEdit {
                 width: 380px;
-                placeholder-text: "Buscar por código, nombre o familia";
+                placeholder-text: "Buscar por código, código de barras, nombre o familia";
                 edited => { buscar(); }
             }
             CheckBox { text: "Solo por surtir"; checked <=> por-surtir; toggled => { buscar(); } }

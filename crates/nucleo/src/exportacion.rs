@@ -12,17 +12,19 @@ use crate::ventas::Venta;
 pub fn productos_a_excel(productos: &[Producto]) -> Resultado<Vec<u8>> {
     let mut libro = Workbook::new();
     let hoja = libro.add_worksheet().set_name("Productos")?;
-    let titulos = ["Código", "Nombre", "Familia", "Precio", "Costo", "Existencia", "Unidad", "A granel"];
+    let titulos =
+        ["Código", "Código de barras", "Nombre", "Familia", "Precio", "Costo", "Existencia", "Unidad", "A granel"];
     encabezados(hoja, &titulos)?;
     for (fila, p) in (1..).zip(productos) {
         hoja.write_string(fila, 0, &p.codigo)?; // como texto: conserva ceros a la izquierda
-        hoja.write_string(fila, 1, &p.nombre)?;
-        hoja.write_string(fila, 2, p.familia.as_deref().unwrap_or_default())?;
-        hoja.write_number_with_format(fila, 3, p.precio.como_f64(), &pesos())?;
-        hoja.write_number_with_format(fila, 4, p.costo.como_f64(), &pesos())?;
-        hoja.write_number(fila, 5, p.existencia.como_f64())?;
-        hoja.write_string(fila, 6, &p.unidad)?;
-        hoja.write_string(fila, 7, if p.granel { "Sí" } else { "No" })?;
+        hoja.write_string(fila, 1, p.codigo_barras.as_deref().unwrap_or_default())?;
+        hoja.write_string(fila, 2, &p.nombre)?;
+        hoja.write_string(fila, 3, p.familia.as_deref().unwrap_or_default())?;
+        hoja.write_number_with_format(fila, 4, p.precio.como_f64(), &pesos())?;
+        hoja.write_number_with_format(fila, 5, p.costo.como_f64(), &pesos())?;
+        hoja.write_number(fila, 6, p.existencia.como_f64())?;
+        hoja.write_string(fila, 7, &p.unidad)?;
+        hoja.write_string(fila, 8, if p.granel { "Sí" } else { "No" })?;
     }
     hoja.autofit();
     Ok(libro.save_to_buffer()?)

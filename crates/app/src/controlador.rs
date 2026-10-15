@@ -1083,6 +1083,7 @@ fn abrir_editor(app: &App, e: &mut Estado, id: i64) {
         EditorProductoUi {
             id: p.id as i32,
             codigo: p.codigo.as_str().into(),
+            codigo_barras: p.codigo_barras.as_deref().unwrap_or_default().into(),
             nombre: p.nombre.as_str().into(),
             familia_indice: p
                 .familia_id
@@ -1150,6 +1151,7 @@ fn datos_producto(e: &Estado, editor: &EditorProductoUi) -> Resultado<DatosProdu
         .collect::<Resultado<_>>()?;
     Ok(DatosProducto {
         codigo: editor.codigo.to_string(),
+        codigo_barras: editor.codigo_barras.to_string(),
         nombre: editor.nombre.to_string(),
         familia_id,
         granel: editor.granel,

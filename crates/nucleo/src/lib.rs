@@ -17,6 +17,7 @@ mod error;
 pub mod exportacion;
 pub mod importacion;
 pub mod negocio;
+pub mod negocios;
 pub mod reportes;
 pub mod texto;
 pub mod usuarios;

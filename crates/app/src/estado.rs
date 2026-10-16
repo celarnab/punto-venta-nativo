@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use nucleo::catalogo::Producto;
+use nucleo::negocios::Negocios;
 use nucleo::reportes::Filtro;
 use nucleo::usuarios::Usuario;
 use nucleo::{Bd, Cantidad, Error, Resultado};
@@ -28,7 +29,11 @@ pub struct OtroPrecioTexto {
 
 pub struct Estado {
     pub bd: Bd,
+    /// La carpeta del negocio abierto: su base, respaldos y configuración.
     pub carpeta: PathBuf,
+    pub negocios: Negocios,
+    /// Al crear un negocio nuevo, el que estaba abierto: a él se vuelve si se cancela.
+    pub negocio_anterior: Option<String>,
     pub configuracion: Configuracion,
     pub sesion: Option<Usuario>,
 
@@ -56,11 +61,13 @@ pub struct Estado {
 }
 
 impl Estado {
-    pub fn new(bd: Bd, carpeta: PathBuf) -> Self {
+    pub fn new(bd: Bd, carpeta: PathBuf, negocios: Negocios) -> Self {
         Self {
             bd,
             configuracion: Configuracion::cargar(&carpeta),
             carpeta,
+            negocios,
+            negocio_anterior: None,
             sesion: None,
             venta_id: None,
             resultados: Vec::new(),

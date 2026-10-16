@@ -36,7 +36,13 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     slint::platform::set_platform(Box::new(SinVentana(ventana.clone()))).map_err(|e| e.to_string())?;
 
     let (bd, ids) = ejemplo()?;
-    let mut estado = Estado::new(bd, std::env::temp_dir().join("punto-venta-captura"));
+    let temporal = std::env::temp_dir().join("punto-venta-captura");
+    let _ = std::fs::remove_file(temporal.join("negocios.json")); // la lista de ejemplo, siempre la misma
+    let mut negocios = nucleo::negocios::Negocios::cargar(&temporal);
+    negocios.renombrar("principal", "Ferretería La Tuerca");
+    let farmacia = negocios.agregar();
+    negocios.renombrar(&farmacia.id, "Farmacia Vida Sana");
+    let mut estado = Estado::new(bd, temporal, negocios);
     estado.configuracion = crate::configuracion::Configuracion { sin_ventanas: true, ..Default::default() };
     let app = App::new()?;
     ventana.set_size(slint::PhysicalSize::new(ANCHO, ALTO));
@@ -108,6 +114,14 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     }
+    // Varios negocios: la lista desde la entrada y la configuración de uno nuevo (al final, porque cambiar de
+    // negocio cierra la base de ejemplo).
+    api.invoke_salir();
+    api.set_eligiendo_negocio(true);
+    foto("17-negocios")?;
+    api.invoke_nuevo_negocio();
+    foto("18-negocio-nuevo")?;
+    api.invoke_cancelar_negocio_nuevo();
     println!("Capturas en {}", carpeta.display());
     Ok(())
 }

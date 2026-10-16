@@ -17,10 +17,11 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use nucleo::Bd;
+use nucleo::negocios::{BASE_DE_DATOS, Negocios};
 
 slint::include_modules!();
 
-/// Dónde vive la base de datos: la carpeta de datos de la app en cada sistema
+/// Dónde viven los negocios: la carpeta de datos de la app en cada sistema
 /// (p. ej. `~/.local/share/punto-venta`, `%APPDATA%\punto-venta`, `~/Library/Application Support/…`).
 fn carpeta_de_datos() -> PathBuf {
     directories::ProjectDirs::from("mx", "negocio", "punto-venta")
@@ -33,10 +34,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(carpeta) = std::env::args().skip_while(|a| a != "--captura").nth(1) {
         return captura::ejecutar(carpeta.into());
     }
-    let carpeta = carpeta_de_datos();
+    // Se abre el negocio que se usó la última vez.
+    let mut negocios = Negocios::cargar(carpeta_de_datos());
+    let actual = negocios.actual().id.clone();
+    let carpeta = negocios.carpeta(&actual).expect("el actual está en la lista");
     std::fs::create_dir_all(&carpeta)?;
-    let bd = Bd::abrir(carpeta.join("punto-venta.sqlite3"))?;
-    let estado = estado::Estado::new(bd, carpeta);
+    let bd = Bd::abrir(carpeta.join(BASE_DE_DATOS))?;
+    negocios.renombrar(&actual, &controlador::nombre_configurado(&bd));
+    if let Err(error) = negocios.guardar() {
+        eprintln!("{error}");
+    }
+    let estado = estado::Estado::new(bd, carpeta, negocios);
     controlador::respaldo_diario(&estado);
 
     let app = App::new()?;

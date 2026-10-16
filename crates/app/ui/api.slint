@@ -16,6 +16,12 @@ export struct PrecioUi {
     desde: string,      // «desde 10» para mayoreo; vacío si se elige a mano
 }
 
+export struct NegocioListaUi {
+    id: string,
+    nombre: string,     // «Sin configurar» si aún no tiene
+    actual: bool,       // el que está abierto
+}
+
 export struct ProductoUi {
     id: int,
     codigo: string,
@@ -205,6 +211,14 @@ export global Api {
     callback entrar(int, string) -> bool;
     callback salir();
     callback cambiar-mi-pin(string) -> string;
+
+    // — Negocios de esta computadora —
+    in property <[NegocioListaUi]> negocios;
+    in property <bool> negocio-nuevo;              // el abierto se acaba de crear: se puede cancelar
+    in-out property <bool> eligiendo-negocio;      // la lista de negocios está a la vista
+    callback cambiar-negocio(string);              // id: lo abre y vuelve a pedir quién entra
+    callback nuevo-negocio();                      // crea uno vacío y lo abre para configurarlo
+    callback cancelar-negocio-nuevo();             // lo borra y vuelve al anterior
 
     // — Avisos —
     in property <string> aviso;

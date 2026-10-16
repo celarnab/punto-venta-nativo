@@ -2,7 +2,41 @@
 
 import { Button, LineEdit } from "std-widgets.slint";
 import { Api, UsuarioUi } from "../api.slint";
-import { Tema, Panel, Titulo, Nota, Campo, PinPad } from "../comunes.slint";
+import { Tema, Panel, Titulo, Nota, Campo, PinPad, Dialogo } from "../comunes.slint";
+
+// Los negocios de esta computadora: cada uno con sus datos, usuarios y PIN.
+component ElegirNegocio inherits Dialogo {
+    titulo: "Cambiar de negocio";
+    ancho: 420px;
+    cerrar => { Api.eligiendo-negocio = false; }
+    Nota { text: "Cada negocio tiene sus propios productos, ventas, usuarios y PIN."; wrap: word-wrap; }
+    for n in Api.negocios: Panel {
+        height: 48px;
+        border-color: n.actual ? Tema.acento : toque.has-hover ? Tema.acento : Tema.borde;
+        HorizontalLayout {
+            padding-left: 14px;
+            padding-right: 14px;
+            Text { text: n.nombre; font-size: 15px; font-weight: 700; vertical-alignment: center; color: Tema.texto; }
+            if n.actual: Text { text: "Abierto"; font-size: 12px; vertical-alignment: center; horizontal-alignment: right; color: Tema.acento; }
+        }
+        toque := TouchArea {
+            clicked => {
+                if n.actual {
+                    Api.eligiendo-negocio = false;
+                } else {
+                    Api.cambiar-negocio(n.id);
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        Button {
+            text: "+ Nuevo negocio";
+            clicked => { Api.nuevo-negocio(); }
+        }
+        Rectangle { }
+    }
+}
 
 export component Configurar inherits Rectangle {
     background: Tema.fondo;
@@ -13,8 +47,13 @@ export component Configurar inherits Rectangle {
         formulario := VerticalLayout {
             padding: 24px;
             spacing: 12px;
-            Titulo { text: "Configurar el punto de venta"; }
-            Nota { text: "Se pide una sola vez. Todo se puede cambiar después en Ajustes."; }
+            Titulo { text: Api.negocio-nuevo ? "Nuevo negocio" : "Configurar el punto de venta"; }
+            Nota {
+                text: Api.negocio-nuevo
+                    ? "Tendrá sus propios productos, ventas y usuarios. Todo se puede cambiar después en Ajustes."
+                    : "Se pide una sola vez. Todo se puede cambiar después en Ajustes.";
+                wrap: word-wrap;
+            }
             negocio := Campo { etiqueta: "Nombre del negocio"; placeholder: "Ferretería La Tuerca"; }
             nombre := Campo { etiqueta: "Tu nombre (administrador)"; }
             HorizontalLayout {
@@ -23,14 +62,21 @@ export component Configurar inherits Rectangle {
                 repetido := Campo { etiqueta: "Repite el PIN"; tipo: InputType.password; }
             }
             if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
-            Button {
-                text: "Empezar";
-                primary: true;
-                clicked => {
-                    if pin.text != repetido.text {
-                        error = "Los PIN no coinciden.";
-                    } else {
-                        error = Api.configurar(negocio.text, nombre.text, pin.text);
+            HorizontalLayout {
+                spacing: 8px;
+                if Api.negocio-nuevo: Button {
+                    text: "Cancelar";
+                    clicked => { Api.cancelar-negocio-nuevo(); }
+                }
+                Button {
+                    text: "Empezar";
+                    primary: true;
+                    clicked => {
+                        if pin.text != repetido.text {
+                            error = "Los PIN no coinciden.";
+                        } else {
+                            error = Api.configurar(negocio.text, nombre.text, pin.text);
+                        }
                     }
                 }
             }
@@ -53,6 +99,13 @@ export component Entrar inherits Rectangle {
                 spacing: 2px;
                 Titulo { text: Api.negocio-nombre; horizontal-alignment: center; }
                 Nota { text: Api.fecha-larga; horizontal-alignment: center; }
+            }
+        }
+        HorizontalLayout {
+            alignment: center;
+            Button {
+                text: Api.negocios.length > 1 ? "Cambiar de negocio" : "Otro negocio…";
+                clicked => { Api.eligiendo-negocio = true; }
             }
         }
         if elegido == 0: VerticalLayout {
@@ -113,4 +166,6 @@ export component Entrar inherits Rectangle {
             }
         }
     }
+
+    if Api.eligiendo-negocio: ElegirNegocio { }
 }

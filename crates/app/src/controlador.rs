@@ -12,17 +12,18 @@ use nucleo::clientes::DatosCliente;
 use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
 use nucleo::negocio::Negocio;
+use nucleo::negocios::BASE_DE_DATOS;
 use nucleo::reportes::{Filtro, Seccion};
 use nucleo::texto::normalizar;
 use nucleo::usuarios::{Autorizacion, DatosUsuario, Rol};
 use nucleo::ventas::Estado as EstadoVenta;
-use nucleo::{Cantidad, Dinero, Error, Porcentaje, Resultado, exportacion, importacion};
+use nucleo::{Bd, Cantidad, Dinero, Error, Porcentaje, Resultado, exportacion, importacion};
 use slint::{ComponentHandle, Model, SharedString, Timer};
 
 use crate::estado::{Estado, OtroPrecioTexto, Pendiente};
 use crate::{
-    Api, App, ClienteUi, CobroUi, EditorProductoUi, ImpresoraUi, NegocioUi, PrecioUi, RespuestaUi, imprimir, respaldos,
-    vista,
+    Api, App, ClienteUi, CobroUi, EditorProductoUi, ImpresoraUi, NegocioListaUi, NegocioUi, PrecioUi, RespuestaUi,
+    imprimir, respaldos, vista,
 };
 
 type Compartido = Rc<RefCell<Estado>>;
@@ -53,6 +54,8 @@ pub fn conectar(app: &App, estado: Compartido) {
     conectar!(api, app, estado, on_configurar, |app, e, negocio, nombre, pin| {
         match configurar(&mut e, &negocio, &nombre, &pin) {
             Ok(()) => {
+                e.negocio_anterior = None;
+                recordar_nombre(&app, &mut e);
                 refrescar_inicio(&app, &e);
                 entrar_como(&app, &mut e);
                 SharedString::new()
@@ -75,6 +78,35 @@ pub fn conectar(app: &App, estado: Compartido) {
         e.venta_id = None;
         app.global::<Api>().set_hay_sesion(false);
         refrescar_inicio(&app, &e); // la lista de quién puede entrar siempre al día
+    });
+    conectar!(api, app, estado, on_cambiar_negocio, |app, e, id| {
+        abrir_negocio(&app, &mut e, &id);
+    });
+    conectar!(api, app, estado, on_nuevo_negocio, |app, e| {
+        let anterior = e.negocios.actual().id.clone();
+        let nuevo = e.negocios.agregar();
+        if abrir_negocio(&app, &mut e, &nuevo.id) {
+            e.negocio_anterior = Some(anterior);
+        } else {
+            let _ = e.negocios.descartar(&nuevo.id);
+        }
+    });
+    conectar!(api, app, estado, on_cancelar_negocio_nuevo, |app, e| {
+        // Solo uno recién creado, que nadie configuró: tiene la carpeta vacía y nada que perder.
+        if e.bd.hay_usuarios().unwrap_or(true) {
+            return;
+        }
+        let nuevo = e.negocios.actual().id.clone();
+        let destino = e.negocio_anterior.take().filter(|id| id != &nuevo);
+        let destino = destino.or_else(|| e.negocios.lista().iter().map(|r| r.id.clone()).find(|id| id != &nuevo));
+        let Some(destino) = destino else { return };
+        if abrir_negocio(&app, &mut e, &destino) {
+            // Ya cerrada su base, se borra su carpeta.
+            if let Err(error) = e.negocios.descartar(&nuevo).and_then(|()| e.negocios.guardar()) {
+                avisar(&app, error.to_string(), true);
+            }
+            refrescar_inicio(&app, &e);
+        }
     });
     conectar!(api, app, estado, on_cambiar_mi_pin, |app, e, pin| {
         let resultado = e.usuario().map(|u| u.id).and_then(|id| e.bd.cambiar_pin(id, &pin));
@@ -668,6 +700,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         let ok = resultado.is_ok();
         let mensaje = texto_de(&app, resultado.map(|_| "Datos del negocio guardados."));
         if ok {
+            recordar_nombre(&app, &mut e);
             refrescar_inicio(&app, &e);
         }
         mensaje
@@ -762,9 +795,61 @@ fn configurar(e: &mut Estado, negocio: &str, nombre: &str, pin: &str) -> Resulta
     Ok(())
 }
 
+/// Cierra el negocio abierto y abre otro: con su base, sus usuarios (hay que volver a entrar), sus respaldos y su
+/// impresora. `false` si no se pudo abrir; entonces queda el de antes.
+fn abrir_negocio(app: &App, e: &mut Estado, id: &str) -> bool {
+    let abierto = e.negocios.carpeta(id).ok_or(Error::NoEncontrado("Negocio")).and_then(|carpeta| {
+        std::fs::create_dir_all(&carpeta)
+            .map_err(|error| Error::invalido(format!("No se pudo crear {}: {error}", carpeta.display())))?;
+        Ok((Bd::abrir(carpeta.join(BASE_DE_DATOS))?, carpeta))
+    });
+    let (bd, carpeta) = match abierto {
+        Ok(abierto) => abierto,
+        Err(error) => {
+            avisar(app, format!("No se pudo abrir el negocio: {error}"), true);
+            return false;
+        }
+    };
+    let negocios = std::mem::take(&mut e.negocios);
+    *e = Estado::new(bd, carpeta, negocios);
+    let _ = e.negocios.elegir(id);
+    recordar_nombre(app, e);
+    respaldo_diario(e);
+    let api = app.global::<Api>();
+    api.set_hay_sesion(false);
+    api.set_eligiendo_negocio(false);
+    refrescar_inicio(app, e);
+    true
+}
+
+/// La lista de negocios muestra el nombre que cada uno tiene en sus datos (y ninguno si aún no se configura).
+fn recordar_nombre(app: &App, e: &mut Estado) {
+    let id = e.negocios.actual().id.clone();
+    e.negocios.renombrar(&id, &nombre_configurado(&e.bd));
+    if let Err(error) = e.negocios.guardar() {
+        avisar(app, error.to_string(), true);
+    }
+}
+
+pub fn nombre_configurado(bd: &Bd) -> String {
+    match bd.hay_usuarios() {
+        Ok(true) => bd.negocio().map(|n| n.nombre).unwrap_or_default(),
+        _ => String::new(),
+    }
+}
+
 fn refrescar_inicio(app: &App, e: &Estado) {
     let api = app.global::<Api>();
-    api.set_hay_usuarios(e.bd.hay_usuarios().unwrap_or(true));
+    let hay_usuarios = e.bd.hay_usuarios().unwrap_or(true);
+    api.set_hay_usuarios(hay_usuarios);
+    let actual = e.negocios.actual().id.clone();
+    api.set_negocios(vista::modelo(e.negocios.lista().iter().map(|r| NegocioListaUi {
+        id: r.id.as_str().into(),
+        nombre: if r.nombre.is_empty() { "Sin configurar".into() } else { r.nombre.as_str().into() },
+        actual: r.id == actual,
+    })));
+    // Un negocio recién creado se puede cancelar (si hay otro al cual volver).
+    api.set_negocio_nuevo(!hay_usuarios && e.negocios.lista().len() > 1);
     let usuarios = e.bd.usuarios().unwrap_or_default();
     api.set_usuarios_login(vista::modelo(usuarios.iter().filter(|u| u.activo).map(vista::usuario)));
     api.set_negocio_nombre(e.bd.negocio().map(|n| n.nombre).unwrap_or_default().into());

@@ -93,6 +93,13 @@ export component Principal inherits Rectangle {
                         text: "Cambiar de usuario";
                         clicked => { Api.salir(); }
                     }
+                    if Api.negocios.length > 1: Button {
+                        text: "Cambiar de negocio";
+                        clicked => {
+                            Api.salir();
+                            Api.eligiendo-negocio = true;
+                        }
+                    }
                     Button {
                         text: "Cambiar mi PIN";
                         clicked => {

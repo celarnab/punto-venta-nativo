@@ -308,7 +308,21 @@ impl Bd {
     pub fn producto_por_codigo(&self, codigo: &str) -> Resultado<Option<Producto>> {
         // Si (por datos viejos) uno tuviera de código el código de barras de otro, gana el código: va al final.
         let sql = format!("{SELECCION} AND (p.codigo = ?1 OR p.codigo_barras = ?1) ORDER BY p.codigo = ?1");
-        Ok(consultar(self.conn(), &sql, [codigo.trim()])?.pop())
+        let codigo = codigo.trim();
+        if let Some(producto) = consultar(self.conn(), &sql, [codigo])?.pop() {
+            return Ok(Some(producto));
+        }
+        // Excel guarda los códigos de barras como número y se come los ceros de la izquierda (070942003469 queda
+        // 70942003469), pero el escáner sí los manda: un código de puros dígitos se compara sin esos ceros.
+        let sin_ceros = codigo.trim_start_matches('0');
+        if sin_ceros.is_empty() || !codigo.bytes().all(|b| b.is_ascii_digit()) {
+            return Ok(None);
+        }
+        let sql = format!(
+            "{SELECCION} AND (ltrim(p.codigo, '0') = ?1 OR ltrim(p.codigo_barras, '0') = ?1)
+             ORDER BY ltrim(p.codigo, '0') = ?1 LIMIT 1"
+        );
+        Ok(consultar(self.conn(), &sql, [sin_ceros])?.pop())
     }
 
     pub fn crear_producto(&mut self, datos: &DatosProducto) -> Resultado<Producto> {
@@ -681,6 +695,21 @@ pub(crate) mod tests {
         let sin = bd.actualizar_producto(arco.id, &datos("10254", "Arco", "145", "0")).unwrap();
         assert_eq!(sin.codigo_barras, None);
         assert!(bd.producto_por_codigo("7501206654088").unwrap().is_none());
+    }
+
+    #[test]
+    fn el_escaner_encuentra_aunque_excel_se_comiera_los_ceros() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let upc = bd.crear_producto(&datos("70942003469", "Crema", "1", "1")).unwrap();
+        let ean = DatosProducto { codigo_barras: "50240017100".into(), ..datos("XL3", "XL-3", "1", "1") };
+        let ean = bd.crear_producto(&ean).unwrap();
+        bd.crear_producto(&datos("0042", "Con ceros", "1", "1")).unwrap();
+
+        assert_eq!(bd.producto_por_codigo("070942003469").unwrap().unwrap().id, upc.id);
+        assert_eq!(bd.producto_por_codigo("0050240017100").unwrap().unwrap().id, ean.id);
+        assert_eq!(bd.producto_por_codigo("42").unwrap().unwrap().nombre, "Con ceros");
+        assert!(bd.producto_por_codigo("000").unwrap().is_none());
+        assert!(bd.producto_por_codigo("0XL3").unwrap().is_none()); // solo con dígitos
     }
 
     #[test]

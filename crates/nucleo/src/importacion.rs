@@ -3,12 +3,17 @@
 //! La primera fila con contenido son los encabezados; se reconocen por nombre en cualquier orden
 //! («Código», «Código de barras», «Descripción», «Precio venta»…); las demás columnas (p. ej. «Impuesto») se
 //! ignoran. Solo el código es obligatorio: lo que no venga en la hoja no se toca.
+//!
+//! Un nombre en celdas combinadas que abarcan varios renglones es un solo producto; si esos renglones traen
+//! códigos de barras distintos, cada uno es una variante. Una hoja sin columna de código propio usa el código de
+//! barras como código: el mismo código de barras con el mismo nombre se junta en un producto, y los que no traen
+//! (o traen «NA») se buscan por nombre o reciben un código generado.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 
-use calamine::{Data, Reader, open_workbook_auto};
+use calamine::{Data, Dimensions, Reader, Sheets, open_workbook_auto};
 use rusqlite::{Connection, OptionalExtension, named_params};
 use serde::Serialize;
 
@@ -74,6 +79,7 @@ impl Columna {
 /// Lo que trae un renglón de la hoja; `None` = la columna no viene o la celda está vacía.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Datos {
+    /// Vacío solo en hojas sin columna de código propio: se busca por nombre o se le genera uno.
     pub codigo: String,
     pub codigo_barras: Option<String>,
     pub nombre: Option<String>,
@@ -91,6 +97,8 @@ pub struct Renglon {
     /// Como lo ve el usuario en Excel (el primero es 1).
     pub numero: usize,
     pub datos: Result<Datos, String>,
+    /// Lo que se hizo al leerlo (variante, renglones juntados…), para la vista previa.
+    pub notas: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -108,6 +116,7 @@ pub struct FilaVista {
     pub codigo: String,
     pub nombre: String,
     pub accion: Accion,
+    pub notas: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -126,19 +135,41 @@ pub fn leer_excel(ruta: impl AsRef<Path>) -> Resultado<Vec<Renglon>> {
         .worksheet_range_at(0)
         .ok_or_else(|| Error::Excel("El archivo no tiene hojas.".into()))?
         .map_err(|e| Error::Excel(e.to_string()))?;
-    let desplazamiento = hoja.start().map_or(0, |(fila, _)| fila as usize);
-    leer_tabla(hoja.rows(), desplazamiento)
+    let combinadas = match &mut libro {
+        Sheets::Xlsx(xlsx) => xlsx.merge_cells_by_sheet_id(0).unwrap_or_default(),
+        Sheets::Xls(xls) => xls.merge_cells_by_sheet_id(0).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    // De posiciones de la hoja a posiciones de la tabla, que empieza en la primera celda con algo.
+    let (fila0, columna0) = hoja.start().unwrap_or((0, 0));
+    let combinadas: Vec<Dimensions> = combinadas
+        .iter()
+        .filter_map(|c| {
+            let inicio = (c.start.0.checked_sub(fila0)?, c.start.1.checked_sub(columna0)?);
+            Some(Dimensions::new(inicio, (c.end.0 - fila0, c.end.1 - columna0)))
+        })
+        .collect();
+    leer_tabla_combinada(hoja.rows(), fila0 as usize, &combinadas)
 }
 
 /// `desplazamiento`: cuántas filas vacías hay arriba de la tabla, para numerar como Excel.
 pub fn leer_tabla<'a>(filas: impl IntoIterator<Item = &'a [Data]>, desplazamiento: usize) -> Resultado<Vec<Renglon>> {
+    leer_tabla_combinada(filas, desplazamiento, &[])
+}
+
+/// Como [`leer_tabla`], con las celdas combinadas de la hoja (en posiciones de la tabla).
+fn leer_tabla_combinada<'a>(
+    filas: impl IntoIterator<Item = &'a [Data]>,
+    desplazamiento: usize,
+    combinadas: &[Dimensions],
+) -> Resultado<Vec<Renglon>> {
     let mut filas = filas
         .into_iter()
         .enumerate()
-        .map(|(i, celdas)| (desplazamiento + i + 1, celdas))
-        .filter(|(_, celdas)| celdas.iter().any(|c| !texto(c).is_empty()));
+        .map(|(i, celdas)| (i, desplazamiento + i + 1, celdas))
+        .filter(|(_, _, celdas)| celdas.iter().any(|c| !texto(c).is_empty()));
 
-    let Some((_, encabezados)) = filas.next() else {
+    let Some((_, _, encabezados)) = filas.next() else {
         return Err(Error::Excel("La hoja está vacía.".into()));
     };
     let mut columnas: HashMap<Columna, usize> = encabezados
@@ -148,9 +179,8 @@ pub fn leer_tabla<'a>(filas: impl IntoIterator<Item = &'a [Data]>, desplazamient
         .rev() // si una columna se repite, gana la primera
         .collect();
     // Una hoja con solo «Código de barras» lo usa como código del producto.
-    if !columnas.contains_key(&Columna::Codigo)
-        && let Some(barras) = columnas.remove(&Columna::CodigoBarras)
-    {
+    let sin_codigo_propio = !columnas.contains_key(&Columna::Codigo);
+    if sin_codigo_propio && let Some(barras) = columnas.remove(&Columna::CodigoBarras) {
         columnas.insert(Columna::Codigo, barras);
     }
     if !columnas.contains_key(&Columna::Codigo) {
@@ -161,17 +191,143 @@ pub fn leer_tabla<'a>(filas: impl IntoIterator<Item = &'a [Data]>, desplazamient
         )));
     }
 
-    Ok(filas
-        .map(|(numero, celdas)| {
-            let celda = |columna| columnas.get(&columna).and_then(|&i| celdas.get(i)).unwrap_or(&Data::Empty);
-            Renglon { numero, datos: leer_datos(celda) }
-        })
-        .collect())
+    // Un renglón con datos solo en columnas que no se usan (p. ej. el total al pie de la hoja) se ignora.
+    let filas =
+        filas.filter(|(_, _, celdas)| columnas.values().any(|&i| celdas.get(i).is_some_and(|c| !texto(c).is_empty())));
+    // Un renglón cuyo nombre está en una celda combinada que empezó más arriba es parte del producto de arriba.
+    let mut grupos: Vec<Vec<(usize, &[Data])>> = Vec::new();
+    for (i, numero, celdas) in filas {
+        let sigue = columnas
+            .get(&Columna::Nombre)
+            .is_some_and(|&c| combinadas.iter().any(|m| m.contains(i as u32, c as u32) && (m.start.0 as usize) < i));
+        match grupos.last_mut() {
+            Some(grupo) if sigue => grupo.push((numero, celdas)),
+            _ => grupos.push(vec![(numero, celdas)]),
+        }
+    }
+
+    let mut renglones = Vec::new();
+    for grupo in &grupos {
+        // De cada columna, lo primero que traiga el grupo (lo combinado solo está en su primer renglón).
+        let celda = |columna| {
+            let i = columnas.get(&columna)?;
+            grupo.iter().filter_map(|(_, celdas)| celdas.get(*i)).find(|c| !vacia(columna, c))
+        };
+        let celda = |columna| celda(columna).unwrap_or(&Data::Empty);
+        let numero = grupo[0].0;
+        // Los códigos distintos del grupo, cada uno con el renglón donde viene.
+        let mut codigos: Vec<(usize, String)> = Vec::new();
+        if let Some(&i) = columnas.get(&Columna::Codigo) {
+            for (n, celdas) in grupo {
+                let codigo = celdas.get(i).map(|c| codigo_de(texto(c))).unwrap_or_default();
+                if !codigo.is_empty() && !codigos.iter().any(|(_, visto)| visto.eq_ignore_ascii_case(&codigo)) {
+                    codigos.push((*n, codigo));
+                }
+            }
+        }
+        if !sin_codigo_propio || codigos.len() < 2 {
+            renglones.push(Renglon { numero, datos: leer_datos(celda, sin_codigo_propio), notas: Vec::new() });
+            continue;
+        }
+        // Varias variantes (p. ej. tonos) bajo un mismo nombre: un producto por código de barras, numerados.
+        // La existencia es del grupo y no dice cuántas hay de cada una: va toda a la primera.
+        let (desde, hasta, total) = (numero, grupo[grupo.len() - 1].0, codigos.len());
+        for (i, (n, codigo)) in codigos.into_iter().enumerate() {
+            let datos = leer_datos(celda, true).map(|datos| Datos {
+                codigo,
+                nombre: datos.nombre.map(|nombre| format!("{nombre} {}", i + 1)),
+                existencia: if i == 0 { datos.existencia } else { None },
+                ..datos
+            });
+            let nota = format!("Variante {} de {total} (renglones {desde} a {hasta}).", i + 1);
+            renglones.push(Renglon { numero: n, datos, notas: vec![nota] });
+        }
+    }
+    Ok(if sin_codigo_propio { juntar_repetidos(renglones) } else { renglones })
 }
 
-fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data) -> Result<Datos, String> {
-    let codigo = texto(celda(Columna::Codigo));
-    if codigo.is_empty() {
+/// En una hoja sin código propio, el mismo código de barras en dos renglones: si el nombre es el mismo, es el
+/// mismo producto (p. ej. capturado con dos precios) y se junta en el primero; si no, el de abajo pierde el
+/// código de barras y lleva uno propio.
+fn juntar_repetidos(renglones: Vec<Renglon>) -> Vec<Renglon> {
+    let mut salida: Vec<Renglon> = Vec::new();
+    let mut por_codigo: HashMap<String, usize> = HashMap::new();
+    for mut renglon in renglones {
+        let Ok(datos) = &mut renglon.datos else {
+            salida.push(renglon);
+            continue;
+        };
+        let clave = datos.codigo.to_lowercase();
+        let primero = por_codigo.get(&clave).map(|&i| &mut salida[i]);
+        match primero {
+            _ if clave.is_empty() => {}
+            None => {
+                por_codigo.insert(clave, salida.len());
+            }
+            Some(primero) => {
+                let numero = primero.numero;
+                if let Ok(base) = &mut primero.datos {
+                    if mismo_nombre(base.nombre.as_deref(), datos.nombre.as_deref()) {
+                        juntar(base, datos);
+                        primero.notas.push(format!(
+                            "Junta el renglón {} (mismo código de barras): existencias sumadas, precio mayor.",
+                            renglon.numero
+                        ));
+                        continue;
+                    }
+                    let duenio = base.nombre.clone().unwrap_or_default();
+                    renglon.notas.push(format!(
+                        "El código de barras {} ya es de «{duenio}» (renglón {numero}); este lleva código propio.",
+                        datos.codigo
+                    ));
+                    datos.codigo.clear();
+                }
+            }
+        }
+        salida.push(renglon);
+    }
+    salida
+}
+
+fn mismo_nombre(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => llave_de_nombre(a) == llave_de_nombre(b),
+        _ => true, // uno sin nombre: es el mismo renglón partido
+    }
+}
+
+/// Lo de `otro` en `base`: existencias sumadas, el precio mayor; lo demás, lo que `base` no traiga.
+fn juntar(base: &mut Datos, otro: &Datos) {
+    base.existencia = match (base.existencia, otro.existencia) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, b) => a.or(b),
+    };
+    base.precio = base.precio.max(otro.precio);
+    base.costo = base.costo.or(otro.costo);
+    base.familia = base.familia.take().or(otro.familia.clone());
+    base.unidad = base.unidad.take().or(otro.unidad.clone());
+    base.granel = base.granel.or(otro.granel);
+    base.nombre = base.nombre.take().or(otro.nombre.clone());
+}
+
+/// Una celda sin dato; en las columnas de código, también «NA», «S/C» y similares.
+fn vacia(columna: Columna, celda: &Data) -> bool {
+    let texto = texto(celda);
+    match columna {
+        Columna::Codigo | Columna::CodigoBarras => codigo_de(texto).is_empty(),
+        _ => texto.is_empty(),
+    }
+}
+
+/// El código tal cual, o vacío si es un «no tiene» («NA», «N/A», «S/C», «-»…).
+fn codigo_de(texto: String) -> String {
+    let sin_codigo = ["na", "n/a", "n.a.", "n.a", "-", "--", "s/c", "sc", "sin codigo", "no aplica", "ninguno"];
+    if sin_codigo.contains(&normalizar(&texto).trim()) { String::new() } else { texto }
+}
+
+fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data, sin_codigo_propio: bool) -> Result<Datos, String> {
+    let codigo = codigo_de(texto(celda(Columna::Codigo)));
+    if codigo.is_empty() && !sin_codigo_propio {
         return Err("Falta el código.".into());
     }
     // Los espacios de más (o «duros», como los que deja copiar de una página) se quitan.
@@ -179,7 +335,9 @@ fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data) -> Result<Datos, String> 
         Some(texto(celda(columna)).split_whitespace().collect::<Vec<_>>().join(" ")).filter(|t| !t.is_empty())
     };
     Ok(Datos {
-        codigo_barras: opcional(Columna::CodigoBarras).filter(|b| !b.eq_ignore_ascii_case(&codigo)),
+        codigo_barras: opcional(Columna::CodigoBarras)
+            .map(codigo_de)
+            .filter(|b| !b.is_empty() && !b.eq_ignore_ascii_case(&codigo)),
         codigo,
         nombre: opcional(Columna::Nombre),
         familia: opcional(Columna::Familia),
@@ -238,15 +396,15 @@ fn numero<N: FromStr<Err = Error>>(celda: &Data, redondear: fn(f64) -> N) -> Res
 
 impl Bd {
     pub fn previsualizar_importacion(&self, renglones: &[Renglon]) -> Resultado<Vista> {
-        planear(self.conn(), renglones)
+        Ok(planear(self.conn(), renglones)?.0)
     }
 
     /// Aplica todo lo que la vista previa marca como crear o actualizar; los renglones con error se saltan.
     pub fn importar(&mut self, renglones: &[Renglon]) -> Resultado<Vista> {
         self.transaccion(|tx| {
-            let vista = planear(tx, renglones)?;
-            for (renglon, fila) in renglones.iter().zip(&vista.filas) {
-                if let (Ok(datos), Accion::Crear | Accion::Actualizar { .. }) = (&renglon.datos, &fila.accion) {
+            let (vista, resueltos) = planear(tx, renglones)?;
+            for (datos, fila) in resueltos.iter().zip(&vista.filas) {
+                if let (Some(datos), Accion::Crear | Accion::Actualizar { .. }) = (datos, &fila.accion) {
                     aplicar(tx, datos)?;
                 }
             }
@@ -255,14 +413,59 @@ impl Bd {
     }
 }
 
-fn planear(conn: &Connection, renglones: &[Renglon]) -> Resultado<Vista> {
+/// La vista previa y, por renglón, sus datos con el código ya resuelto (el generado o el del producto que se
+/// encontró por nombre); `None` si el renglón no se puede leer.
+fn planear(conn: &Connection, renglones: &[Renglon]) -> Resultado<(Vista, Vec<Option<Datos>>)> {
     let mut vista = Vista::default();
+    let mut resueltos = Vec::new();
     let mut vistos = Vistos::new();
+    let mut generador = Generador::nuevo(conn)?;
+    let mut tomados: HashMap<String, usize> = HashMap::new(); // por nombre: cuántos sin código ya se reconocieron
     for renglon in renglones {
+        let mut notas = renglon.notas.clone();
         let (codigo, nombre, accion) = match &renglon.datos {
-            Err(mensaje) => (String::new(), String::new(), Accion::Error { mensaje: mensaje.clone() }),
+            Err(mensaje) => {
+                resueltos.push(None);
+                (String::new(), String::new(), Accion::Error { mensaje: mensaje.clone() })
+            }
             Ok(datos) => {
-                let existente = buscar(conn, &datos.codigo)?;
+                // Sin código: el producto que ya se llame igual (si varios se llaman igual, el primer renglón con
+                // ese nombre es el primero de ellos, el segundo el segundo…) o, si es nuevo, uno generado.
+                let (datos, existente) = if datos.codigo.is_empty() {
+                    let mut ya = None;
+                    if let Some(llave) = datos.nombre.as_deref().map(llave_de_nombre) {
+                        let tomado = tomados.entry(llave.clone()).or_insert(0);
+                        ya = mismos_nombres(conn, &llave)?.get(*tomado).copied();
+                        *tomado += 1;
+                    }
+                    match ya {
+                        Some(id) => {
+                            let producto = catalogo::cargar(conn, id)?;
+                            (Datos { codigo: producto.codigo.clone(), ..datos.clone() }, Some(producto))
+                        }
+                        // Solo se gasta un código en lo que sí se va a crear.
+                        None => match accion(datos, None) {
+                            Accion::Error { mensaje } => {
+                                resueltos.push(None);
+                                let accion = Accion::Error { mensaje };
+                                contar(&mut vista, &accion);
+                                let nombre = datos.nombre.clone().unwrap_or_default();
+                                let numero = renglon.numero;
+                                vista.filas.push(FilaVista { numero, codigo: String::new(), nombre, accion, notas });
+                                continue;
+                            }
+                            _ => {
+                                let codigo = generador.siguiente(conn)?;
+                                notas.push(format!("Código generado: {codigo}."));
+                                (Datos { codigo, ..datos.clone() }, None)
+                            }
+                        },
+                    }
+                } else {
+                    let existente = buscar(conn, &datos.codigo)?;
+                    (datos.clone(), existente)
+                };
+                let datos = &datos;
                 let choque = match repetido(&vistos, datos) {
                     Some(mensaje) => Some(mensaje),
                     None => ocupado(conn, datos, existente.as_ref())?,
@@ -278,18 +481,77 @@ fn planear(conn: &Connection, renglones: &[Renglon]) -> Resultado<Vista> {
                     None => accion(datos, existente.as_ref()),
                 };
                 let nombre = datos.nombre.clone().or(existente.map(|p| p.nombre)).unwrap_or_default();
+                resueltos.push(Some(datos.clone()));
                 (datos.codigo.clone(), nombre, accion)
             }
         };
-        match accion {
-            Accion::Crear => vista.crear += 1,
-            Accion::Actualizar { .. } => vista.actualizar += 1,
-            Accion::SinCambios => vista.sin_cambios += 1,
-            Accion::Error { .. } => vista.errores += 1,
-        }
-        vista.filas.push(FilaVista { numero: renglon.numero, codigo, nombre, accion });
+        contar(&mut vista, &accion);
+        vista.filas.push(FilaVista { numero: renglon.numero, codigo, nombre, accion, notas });
     }
-    Ok(vista)
+    Ok((vista, resueltos))
+}
+
+fn contar(vista: &mut Vista, accion: &Accion) {
+    match accion {
+        Accion::Crear => vista.crear += 1,
+        Accion::Actualizar { .. } => vista.actualizar += 1,
+        Accion::SinCambios => vista.sin_cambios += 1,
+        Accion::Error { .. } => vista.errores += 1,
+    }
+}
+
+/// El nombre sin acentos, mayúsculas ni espacios de más, para compararlo.
+fn llave_de_nombre(nombre: &str) -> String {
+    normalizar(nombre).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Los productos que se llaman así, en el orden en que se dieron de alta: así se reconocen en una segunda
+/// importación los que no traen código.
+fn mismos_nombres(conn: &Connection, llave: &str) -> Resultado<Vec<i64>> {
+    let mut consulta = conn.prepare_cached("SELECT id, nombre FROM productos WHERE borrado_en IS NULL ORDER BY id")?;
+    let ids = consulta
+        .query_map([], |f| Ok((f.get::<_, i64>(0)?, f.get::<_, String>(1)?)))?
+        .filter_map(Result::ok)
+        .filter(|(_, nombre)| llave_de_nombre(nombre) == llave)
+        .map(|(id, _)| id)
+        .collect();
+    Ok(ids)
+}
+
+/// Códigos para los productos que no traen: las iniciales del negocio y un número que sigue al último usado
+/// («Farmacia Vida Sana» → FVS-0001, FVS-0002…).
+struct Generador {
+    prefijo: String,
+    siguiente: u32,
+}
+
+impl Generador {
+    fn nuevo(conn: &Connection) -> Resultado<Self> {
+        let negocio: String = conn.query_row("SELECT nombre FROM negocio", [], |f| f.get(0)).unwrap_or_default();
+        let mut prefijo: String =
+            normalizar(&negocio).split_whitespace().filter_map(|p| p.chars().next()).take(4).collect();
+        prefijo.retain(|c| c.is_ascii_alphanumeric());
+        let prefijo = if prefijo.is_empty() { "P".to_owned() } else { prefijo.to_uppercase() };
+        // Incluye los borrados: un código generado no se reusa, para no confundirlo en el historial.
+        let mut consulta = conn.prepare("SELECT codigo FROM productos WHERE codigo LIKE ?1 || '-%'")?;
+        let ultimo = consulta
+            .query_map([&prefijo], |f| f.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .filter_map(|c| c.get(prefijo.len() + 1..)?.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        Ok(Self { prefijo, siguiente: ultimo + 1 })
+    }
+
+    fn siguiente(&mut self, conn: &Connection) -> Resultado<String> {
+        loop {
+            let codigo = format!("{}-{:04}", self.prefijo, self.siguiente);
+            self.siguiente += 1;
+            if catalogo::quien_usa(conn, &codigo, None)?.is_none() {
+                return Ok(codigo);
+            }
+        }
+    }
 }
 
 /// Código o código de barras (en minúsculas) → el renglón donde apareció y si ahí era código de barras.
@@ -609,6 +871,159 @@ mod tests {
         assert_eq!(vista.filas[7].accion, Accion::Actualizar { cambios: vec!["Nombre: Ya existía → Algo".into()] });
         let hecho = bd.importar(&renglones).unwrap();
         assert_eq!((hecho.crear, hecho.actualizar, hecho.errores), (2, 1, 5));
+    }
+
+    fn farmacia(bd: &mut Bd) {
+        let mut negocio = bd.negocio().unwrap();
+        negocio.nombre = "Vida Sana".into();
+        bd.guardar_negocio(&negocio).unwrap();
+    }
+
+    /// Como la hoja FULL: sin columna de código propio, con encabezados que no se usan.
+    fn lista(filas: Vec<Vec<Data>>, combinadas: &[Dimensions]) -> Vec<Renglon> {
+        let mut todas = vec![
+            [
+                "DESCRIPCION",
+                "MARCA LABORATORIO",
+                "EXISTENCIA",
+                "PRECIO DE VENTA",
+                "CANTIDAD VENDIDA",
+                "CODIGO DE BARRAS",
+            ]
+            .iter()
+            .map(|e| s(e))
+            .collect(),
+        ];
+        todas.extend(filas);
+        leer_tabla_combinada(todas.iter().map(Vec::as_slice), 0, combinadas).unwrap()
+    }
+
+    fn f(n: f64) -> Data {
+        Data::Float(n)
+    }
+
+    #[test]
+    fn nombre_combinado_con_varios_codigos_son_variantes() {
+        let e = Data::Empty;
+        // Renglones 2 a 5: «Hidratante» combinado en A, D y E; tres códigos de barras en los de abajo.
+        // Renglones 6 y 7: combinado también el código de barras, que solo está en el 6.
+        let renglones = lista(
+            vec![
+                vec![s("Hidratante de labios"), e.clone(), f(1.0), f(25.0), f(6.0), e.clone()],
+                vec![e.clone(), e.clone(), e.clone(), e.clone(), e.clone(), f(6974452880555.0)],
+                vec![e.clone(), e.clone(), e.clone(), e.clone(), e.clone(), s("6974452880579")],
+                vec![e.clone(), e.clone(), e.clone(), e.clone(), e.clone(), f(6972947345046.0)],
+                vec![s("Bissu labial"), e.clone(), f(1.0), f(45.0), e.clone(), f(7503041351474.0)],
+                vec![e.clone(), e.clone(), e.clone(), e.clone(), e.clone(), e.clone()],
+            ],
+            &[
+                Dimensions::new((1, 0), (4, 0)),
+                Dimensions::new((1, 2), (4, 2)),
+                Dimensions::new((1, 3), (4, 3)),
+                Dimensions::new((5, 0), (6, 0)),
+                Dimensions::new((5, 5), (6, 5)),
+            ],
+        );
+        let leidos: Vec<_> = renglones
+            .iter()
+            .map(|r| {
+                let d = r.datos.as_ref().unwrap();
+                (r.numero, d.codigo.as_str(), d.nombre.as_deref().unwrap(), d.precio, d.existencia)
+            })
+            .collect();
+        assert_eq!(
+            leidos,
+            [
+                (3, "6974452880555", "Hidratante de labios 1", Some(d("25")), Some(c("1"))),
+                (4, "6974452880579", "Hidratante de labios 2", Some(d("25")), None),
+                (5, "6972947345046", "Hidratante de labios 3", Some(d("25")), None),
+                (6, "7503041351474", "Bissu labial", Some(d("45")), Some(c("1"))),
+            ]
+        );
+        assert_eq!(renglones[1].notas, ["Variante 2 de 3 (renglones 2 a 5)."]);
+    }
+
+    #[test]
+    fn mismo_codigo_de_barras_se_junta_o_lleva_codigo_propio() {
+        let e = Data::Empty;
+        let renglones = lista(
+            vec![
+                vec![s("ALTIVER TAB. 25 MG."), s("MAVER"), f(3.0), f(25.0), e.clone(), f(7503000422405.0)],
+                vec![s("ALKA-SELTZER 100 TAB"), s("BAYER"), f(1.0), f(300.0), e.clone(), f(7501008443026.0)],
+                vec![s("altiver  tab. 25 mg."), e.clone(), f(2.0), f(20.0), e.clone(), f(7503000422405.0)],
+                vec![s("ALKA-SELTZER 1 PAR"), s("BAYER"), f(40.0), f(9.0), e.clone(), f(7501008443026.0)],
+            ],
+            &[],
+        );
+        assert_eq!(renglones.len(), 3);
+        let altiver = renglones[0].datos.as_ref().unwrap();
+        assert_eq!((altiver.existencia, altiver.precio), (Some(c("5")), Some(d("25"))));
+        assert_eq!(
+            renglones[0].notas,
+            ["Junta el renglón 4 (mismo código de barras): existencias sumadas, precio mayor."]
+        );
+        let suelto = renglones[2].datos.as_ref().unwrap();
+        assert_eq!((renglones[2].numero, suelto.codigo.as_str()), (5, ""));
+        assert!(renglones[2].notas[0].contains("ya es de «ALKA-SELTZER 100 TAB» (renglón 3)"));
+    }
+
+    #[test]
+    fn sin_codigo_de_barras_se_genera_y_se_reconoce_por_nombre() {
+        let mut bd = Bd::en_memoria().unwrap();
+        farmacia(&mut bd);
+        let e = Data::Empty;
+        let renglones = lista(
+            vec![
+                vec![s("TIJERAS PENMAX"), s("NA"), f(2.0), f(35.0), e.clone(), s("NA")],
+                vec![s("MEDICIÓN DE SIGNOS VITALES"), e.clone(), e.clone(), f(60.0), e.clone(), s("NA")],
+                vec![s("MEDICIÓN DE SIGNOS VITALES"), e.clone(), e.clone(), f(20.0), e.clone(), e.clone()],
+                vec![s("ALKA-SELTZER 100 TAB"), e.clone(), f(1.0), f(300.0), e.clone(), f(7501008443026.0)],
+                vec![s("ALKA-SELTZER 1 PAR"), e.clone(), f(40.0), f(9.0), e.clone(), f(7501008443026.0)],
+            ],
+            &[],
+        );
+        let vista = bd.previsualizar_importacion(&renglones).unwrap();
+        let codigos: Vec<_> = vista.filas.iter().map(|f| f.codigo.as_str()).collect();
+        assert_eq!(codigos, ["VS-0001", "VS-0002", "VS-0003", "7501008443026", "VS-0004"]);
+        assert_eq!(vista.filas[0].notas, ["Código generado: VS-0001."]);
+        assert!(bd.producto_por_codigo("VS-0001").unwrap().is_none()); // la vista previa no toca nada
+
+        assert_eq!(bd.importar(&renglones).unwrap().crear, 5);
+        let tijeras = bd.producto_por_codigo("VS-0001").unwrap().unwrap();
+        assert_eq!((tijeras.nombre.as_str(), tijeras.precio, tijeras.existencia), ("TIJERAS PENMAX", d("35"), c("2")));
+        assert_eq!(bd.producto_por_codigo("VS-0004").unwrap().unwrap().nombre, "ALKA-SELTZER 1 PAR");
+
+        // Otra vez el mismo archivo: los que no traen código se reconocen por nombre, en orden si se repite.
+        let otra = bd.previsualizar_importacion(&renglones).unwrap();
+        assert_eq!((otra.crear, otra.sin_cambios, otra.errores), (0, 5, 0));
+        let codigos: Vec<_> = otra.filas.iter().map(|f| f.codigo.as_str()).collect();
+        assert_eq!(codigos, ["VS-0001", "VS-0002", "VS-0003", "7501008443026", "VS-0004"]);
+        // Los siguientes generados siguen la numeración.
+        // Los siguientes generados siguen la numeración; lo que no se va a crear no gasta código; el total al pie
+        // (en una columna que no se usa) no es un renglón.
+        let nuevo = lista(
+            vec![
+                vec![s("SIN PRECIO"), e.clone(), e.clone(), e.clone(), e.clone(), s("NA")],
+                vec![s("CINTA MÉTRICA"), e.clone(), e.clone(), f(55.0), e.clone(), s("N/A")],
+                vec![e.clone(), s(""), e.clone(), e.clone(), e.clone(), e.clone(), f(324687.5)],
+            ],
+            &[],
+        );
+        let vista = bd.previsualizar_importacion(&nuevo).unwrap();
+        assert_eq!(vista.filas.len(), 2);
+        assert_eq!(vista.filas[0].accion, Accion::Error { mensaje: "Producto nuevo sin precio.".into() });
+        assert_eq!(vista.filas[1].codigo, "VS-0005");
+    }
+
+    #[test]
+    fn na_no_es_un_codigo_en_hojas_con_codigo_propio() {
+        let renglones = tabla(vec![
+            vec![s("Código"), s("Código de barras"), s("Nombre"), s("Precio")],
+            vec![s("NA"), s("750"), s("Algo"), Data::Float(1.0)],
+            vec![s("A1"), s("n/a"), s("Otro"), Data::Float(1.0)],
+        ]);
+        assert_eq!(renglones[0].datos, Err("Falta el código.".into()));
+        assert_eq!(renglones[1].datos.as_ref().unwrap().codigo_barras, None);
     }
 
     #[test]

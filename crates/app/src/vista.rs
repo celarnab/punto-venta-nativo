@@ -213,12 +213,14 @@ pub fn corte(c: &Corte) -> CorteUi {
 
 pub fn importacion(vista: &Vista) -> (ModelRc<ImportacionUi>, String) {
     let filas = vista.filas.iter().filter(|f| f.accion != Accion::SinCambios).map(|f| {
-        let (accion, detalle) = match &f.accion {
-            Accion::Crear => ("Nuevo", String::new()),
-            Accion::Actualizar { cambios } => ("Cambia", cambios.join(" · ")),
-            Accion::SinCambios => ("Igual", String::new()),
-            Accion::Error { mensaje } => ("Error", mensaje.clone()),
+        let (accion, mut detalle) = match &f.accion {
+            Accion::Crear => ("Nuevo", Vec::new()),
+            Accion::Actualizar { cambios } => ("Cambia", cambios.clone()),
+            Accion::SinCambios => ("Igual", Vec::new()),
+            Accion::Error { mensaje } => ("Error", vec![mensaje.clone()]),
         };
+        detalle.extend(f.notas.iter().cloned()); // variante, renglones juntados, código generado…
+        let detalle = detalle.join(" · ");
         ImportacionUi {
             numero: texto(f.numero.to_string()),
             codigo: texto(&f.codigo),

@@ -1,4 +1,5 @@
-# Pruebas en cada push; instaladores para Windows, macOS y Linux al publicar una etiqueta vX.Y.Z o a mano.
+# Pruebas en cada push; instaladores para Windows (10/11 y 7 de 32 bits), macOS y Linux al publicar una
+# etiqueta vX.Y.Z o a mano.
 name: Instaladores
 
 on:
@@ -34,6 +35,9 @@ jobs:
       matrix:
         include:
           - { sistema: windows-latest, objetivo: x86_64-pc-windows-msvc, formatos: nsis, nombre: Windows }
+          # Windows 7 de 32 bits: Rust solo lo soporta en «tier 3», sin biblioteca estándar precompilada; se
+          # compila con nightly (build-std). Ver los pasos marcados con `matrix.win7`.
+          - { sistema: windows-latest, objetivo: i686-win7-windows-msvc, formatos: nsis, nombre: Windows7-32bits, win7: true }
           # En macOS se genera la .app, se firma completa y el .dmg se arma aparte (ver abajo).
           - { sistema: macos-latest, objetivo: aarch64-apple-darwin, formatos: app, nombre: macOS-AppleSilicon }
           - { sistema: macos-latest, objetivo: x86_64-apple-darwin, formatos: app, nombre: macOS-Intel }
@@ -43,8 +47,13 @@ jobs:
       - uses: actions/checkout@v7
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y $DEPENDENCIAS_LINUX libfuse2
-      - uses: dtolnay/rust-toolchain@stable
+      - if: ${{ !matrix.win7 }}
+        uses: dtolnay/rust-toolchain@stable
         with: { targets: "${{ matrix.objetivo }}" }
+      # Un nightly fijo: build-std a veces se rompe de un día para otro.
+      - if: ${{ matrix.win7 }}
+        uses: dtolnay/rust-toolchain@master
+        with: { toolchain: nightly-2026-10-15, components: "rust-src, llvm-tools" }
       - uses: Swatinem/rust-cache@v2
         with: { key: "${{ matrix.objetivo }}" }
       - run: cargo install cargo-packager --locked
@@ -52,8 +61,31 @@ jobs:
         working-directory: crates/app
         shell: bash
         run: |
-          cargo build --release -p punto-venta --target ${{ matrix.objetivo }}
+          if [ "${{ matrix.win7 }}" = "true" ]; then
+            # El runtime de C va dentro del .exe: Windows 7 no trae el de Visual C++.
+            RUSTFLAGS="-C target-feature=+crt-static" \
+              cargo build --release -p punto-venta --target ${{ matrix.objetivo }} -Z build-std
+          else
+            cargo build --release -p punto-venta --target ${{ matrix.objetivo }}
+          fi
           cargo packager --release --target ${{ matrix.objetivo }} --formats ${{ matrix.formatos }}
+          if [ "${{ matrix.win7 }}" = "true" ]; then
+            for f in ../../target/instaladores/*_x86-setup.exe; do mv "$f" "${f/_x86-setup/_windows7-32bits-setup}"; done
+          fi
+      # Si el .exe pide una sola función que Windows 7 no tiene, ni siquiera abre («no se encontró el punto de
+      # entrada…»). Se revisan las que agregó Windows 8 o 10 y suelen colarse desde alguna biblioteca.
+      - name: Revisar que no use funciones de Windows 8 o posterior
+        if: ${{ matrix.win7 }}
+        shell: bash
+        run: |
+          objdump="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-objdump.exe"
+          "$objdump" -p "target/${{ matrix.objetivo }}/release/punto-venta.exe" > importaciones.txt
+          grep -i "DLL Name" importaciones.txt
+          nuevas='shcore\.dll|api-ms-win-core-synch-l1-2|api-ms-win-crt-|vcruntime140|api-ms-win-core-winrt|GetSystemTimePreciseAsFileTime|WaitOnAddress|WakeByAddress|GetDpiFor|GetSystemMetricsForDpi|AdjustWindowRectExForDpi|DpiAwarenessContext|EnableNonClientDpiScaling|SetThreadDescription|GetThreadDescription|CreateFile2|ProcessPrng|GetCurrentThreadStackLimits'
+          if grep -E -i "$nuevas" importaciones.txt; then
+            echo "::error::El .exe usa funciones que Windows 7 no tiene (arriba)."
+            exit 1
+          fi
       # Sin firma de la .app completa, macOS dice que la app «está dañada» al bajarla de internet.
       # Una firma ad hoc (sin cuenta de Apple Developer) basta para que se pueda abrir con
       # «Abrir de todas formas»; para que abra sin avisos haría falta firmar y notarizar con Apple.

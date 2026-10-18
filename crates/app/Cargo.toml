@@ -15,6 +15,10 @@ rfd = "0.17.2"
 directories = "6.0.0"
 png = { version = "0.18.1", optional = true }
 
+# Windows 7: se dibuja sin la tarjeta de video (ver `main`), con las fuentes del sistema.
+[target.'cfg(target_vendor = "win7")'.dependencies]
+slint = { version = "1.18.1", features = ["software-renderer-systemfonts"] }
+
 [build-dependencies]
 slint-build = "1.18.1"
 

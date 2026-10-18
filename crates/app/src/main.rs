@@ -34,6 +34,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(carpeta) = std::env::args().skip_while(|a| a != "--captura").nth(1) {
         return captura::ejecutar(carpeta.into());
     }
+    // En Windows 7 el OpenGL de las computadoras de entonces suele fallar o dibujar mal: se dibuja sin la
+    // tarjeta de video. Con SLINT_BACKEND se puede probar otro.
+    #[cfg(target_vendor = "win7")]
+    if std::env::var_os("SLINT_BACKEND").is_none() {
+        slint::BackendSelector::new().backend_name("winit".into()).renderer_name("software".into()).select()?;
+    }
     // Se abre el negocio que se usó la última vez.
     let mut negocios = Negocios::cargar(carpeta_de_datos());
     let actual = negocios.actual().id.clone();

@@ -82,18 +82,20 @@ jobs:
         run: |
           exe="target/${{ matrix.objetivo }}/release/punto-venta.exe"
           timeout 60 "$exe" --probar-win7 || { echo "::error::Falló --probar-win7"; exit 1; }
-          readobj="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-readobj.exe"
-          "$readobj" --coff-imports "$exe" > importaciones.txt
-          # Bloques «Import {» (al arrancar) y «DelayImport {» (diferidas), cada uno con su «Name:» y sus «Symbol:».
-          awk '/^ *Import \{/ { t = "arranque" } /^ *DelayImport \{/ { t = "diferida" }
-               /^ *Name:/ { dll = tolower($2) } /^ *Symbol:/ { print t, dll, $2 }' importaciones.txt > funciones.txt
-          if ! grep -q '^arranque ' funciones.txt; then
-            echo "::error::No se pudieron leer las importaciones del .exe"; head -60 importaciones.txt; exit 1
+          herramientas="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-msvc/bin"
+          # Al arrancar: llvm-objdump -p lista solo la tabla de importaciones normal (no la diferida).
+          "$herramientas/llvm-objdump.exe" -p "$exe" > al-arrancar.txt
+          # Diferidas: los bloques «DelayImport {» de primer nivel de llvm-readobj, con su «Name:» (sangría 2) y un
+          # sub-bloque «Import {» por función con su «Symbol:» (sangría 4): ver printDelayImportedSymbols en LLVM.
+          "$herramientas/llvm-readobj.exe" --coff-imports "$exe" > importaciones.txt
+          awk '/^[A-Za-z]/ { t = ($1 == "DelayImport") } t && /^  Name:/ { dll = tolower($2) }
+               t && /^ +Symbol:/ { print dll, $2 }' importaciones.txt > diferidas.txt
+          if ! grep -qi "DLL Name: kernel32.dll" al-arrancar.txt; then
+            echo "::error::No se pudieron leer las importaciones del .exe"; head -60 al-arrancar.txt; exit 1
           fi
-          grep '^arranque ' funciones.txt | cut -d' ' -f2- > al-arrancar.txt
-          grep '^diferida ' funciones.txt | cut -d' ' -f2- > diferidas.txt || true
-          echo "Al arrancar:"; cut -d' ' -f1 al-arrancar.txt | sort -u
+          echo "Al arrancar:"; grep -i "DLL Name" al-arrancar.txt | sort -u
           echo "Diferidas:"; cat diferidas.txt
+          echo "Bloques diferidos tal cual:"; awk '/^DelayImport \{/,/^\}/' importaciones.txt
           nuevas='combase\.dll|shcore\.dll|api-ms-win-core-synch-l1-2|api-ms-win-crt-|vcruntime140|api-ms-win-core-winrt|GetSystemTimePreciseAsFileTime|WaitOnAddress|WakeByAddress|GetDpiFor|GetSystemMetricsForDpi|AdjustWindowRectExForDpi|DpiAwarenessContext|EnableNonClientDpiScaling|SetThreadDescription|GetThreadDescription|CreateFile2|ProcessPrng|GetCurrentThreadStackLimits'
           if grep -E -i "$nuevas" al-arrancar.txt; then
             echo "::error::El .exe pide al arrancar funciones que Windows 7 no tiene (arriba)."

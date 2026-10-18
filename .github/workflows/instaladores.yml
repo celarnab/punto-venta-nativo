@@ -73,23 +73,33 @@ jobs:
           if [ "${{ matrix.win7 }}" = "true" ]; then
             for f in ../../target/instaladores/*_x86-setup.exe; do mv "$f" "${f/_x86-setup/_windows7-32bits-setup}"; done
           fi
-      # Si el .exe pide una sola función que Windows 7 no tiene, ni siquiera abre («no se encontró el punto de
-      # entrada…»). Se revisan las que agregó Windows 8 o 10 y suelen colarse desde alguna biblioteca.
-      - name: Revisar que no use funciones de Windows 8 o posterior
+      # Si el .exe pide al arrancar una sola función que Windows 7 no tiene, ni siquiera abre («no se encontró el
+      # punto de entrada…»). combase.dll y la de errores de WinRT (Windows 8) deben estar diferidas, y de ellas solo
+      # lo que src/win7.rs sabe sustituir; ninguna otra de Windows 8 o posterior.
+      - name: Revisar que abra en Windows 7
         if: ${{ matrix.win7 }}
         shell: bash
         run: |
+          exe="target/${{ matrix.objetivo }}/release/punto-venta.exe"
+          timeout 60 "$exe" --probar-win7 || { echo "::error::Falló --probar-win7"; exit 1; }
           objdump="$(rustc --print sysroot)/lib/rustlib/x86_64-pc-windows-msvc/bin/llvm-objdump.exe"
-          "$objdump" -p "target/${{ matrix.objetivo }}/release/punto-venta.exe" > importaciones.txt
-          grep -i "DLL Name" importaciones.txt
-          nuevas='shcore\.dll|api-ms-win-core-synch-l1-2|api-ms-win-crt-|vcruntime140|api-ms-win-core-winrt|GetSystemTimePreciseAsFileTime|WaitOnAddress|WakeByAddress|GetDpiFor|GetSystemMetricsForDpi|AdjustWindowRectExForDpi|DpiAwarenessContext|EnableNonClientDpiScaling|SetThreadDescription|GetThreadDescription|CreateFile2|ProcessPrng|GetCurrentThreadStackLimits'
-          if grep -E -i "$nuevas" importaciones.txt; then
-            echo "::error::El .exe usa funciones que Windows 7 no tiene (arriba)."
+          "$objdump" -p "$exe" > importaciones.txt
+          sed '/The Delay Import Tables/,$d' importaciones.txt > al-arrancar.txt
+          awk '/The Delay Import Tables/ { d = 1 } /DLL Name:/ { dll = tolower($3); next }
+               d && /^ +[0-9]+ +[A-Za-z_]/ { print dll, $2 }' importaciones.txt > diferidas.txt
+          echo "Al arrancar:"; grep -i "DLL Name" al-arrancar.txt
+          echo "Diferidas:"; cat diferidas.txt
+          nuevas='combase\.dll|shcore\.dll|api-ms-win-core-synch-l1-2|api-ms-win-crt-|vcruntime140|api-ms-win-core-winrt|GetSystemTimePreciseAsFileTime|WaitOnAddress|WakeByAddress|GetDpiFor|GetSystemMetricsForDpi|AdjustWindowRectExForDpi|DpiAwarenessContext|EnableNonClientDpiScaling|SetThreadDescription|GetThreadDescription|CreateFile2|ProcessPrng|GetCurrentThreadStackLimits'
+          if grep -E -i "$nuevas" al-arrancar.txt; then
+            echo "::error::El .exe pide al arrancar funciones que Windows 7 no tiene (arriba)."
             exit 1
           fi
-      # Sin firma de la .app completa, macOS dice que la app «está dañada» al bajarla de internet.
-      # Una firma ad hoc (sin cuenta de Apple Developer) basta para que se pueda abrir con
-      # «Abrir de todas formas»; para que abra sin avisos haría falta firmar y notarizar con Apple.
+          grep -q '^combase.dll ' diferidas.txt || { echo "::error::combase.dll no quedó diferida"; exit 1; }
+          conocidas='^(CoTaskMemAlloc|CoTaskMemFree|CoCreateFreeThreadedMarshaler|CoIncrementMTAUsage|RoGetAgileReference|RoOriginateErrorW)$'
+          if awk '{ print $2 }' diferidas.txt | grep -E -v "$conocidas"; then
+            echo "::error::Funciones diferidas que src/win7.rs no sabe sustituir (arriba)."
+            exit 1
+          fi
       - name: Firmar la app y armar el .dmg
         if: runner.os == 'macOS'
         shell: bash

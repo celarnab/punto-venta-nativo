@@ -11,6 +11,8 @@ mod estado;
 mod imprimir;
 mod respaldos;
 mod vista;
+#[cfg(target_vendor = "win7")]
+mod win7;
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -33,6 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(feature = "captura")]
     if let Some(carpeta) = std::env::args().skip_while(|a| a != "--captura").nth(1) {
         return captura::ejecutar(carpeta.into());
+    }
+    #[cfg(target_vendor = "win7")]
+    if std::env::args().any(|a| a == "--probar-win7") {
+        return win7::probar().map_err(Into::into);
     }
     // En Windows 7 el OpenGL de las computadoras de entonces suele fallar o dibujar mal: se dibuja sin la
     // tarjeta de video. Con SLINT_BACKEND se puede probar otro.

@@ -4,6 +4,69 @@ import { Button, LineEdit, ListView, CheckBox, ComboBox } from "std-widgets.slin
 import { Api, EditorProductoUi } from "../api.slint";
 import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
 
+/// Existencia, entradas, conteos y últimos movimientos del producto abierto. Las entradas y los conteos solo
+/// aparecen para quien maneja el inventario.
+component Existencias inherits VerticalLayout {
+    in property <bool> granel;
+    callback resultado(string); // vacío si salió bien; si no, el error
+    spacing: 8px;
+    Subtitulo { text: "Existencia: " + Api.editor.existencia + " " + (granel ? "kg" : Api.editor.unidad); }
+    if Api.puede-inventario: VerticalLayout {
+        spacing: 8px;
+        entrada := Campo { etiqueta: "Llegó mercancía (cantidad)"; numero: true; }
+        referencia := Campo { etiqueta: "Factura / proveedor"; }
+        Button {
+            text: "Registrar entrada";
+            enabled: entrada.text != "";
+            clicked => {
+                let error = Api.registrar-entrada(Api.editor.id, entrada.text, referencia.text);
+                if error == "" { entrada.text = ""; referencia.text = ""; }
+                root.resultado(error);
+            }
+        }
+        contada := Campo { etiqueta: "Conteo físico: hay realmente"; numero: true; }
+        Button {
+            text: "Ajustar existencia";
+            enabled: contada.text != "";
+            clicked => {
+                let error = Api.ajustar-existencia(Api.editor.id, contada.text, "Conteo físico");
+                if error == "" { contada.text = ""; }
+                root.resultado(error);
+            }
+        }
+    }
+    Text { text: "Últimos movimientos"; font-size: 12px; color: Tema.texto-2; font-weight: 700; }
+    Panel {
+        min-height: 160px;
+        ListView {
+            for m[i] in Api.movimientos: Renglon {
+                indice: i;
+                height: 24px;
+                Celda { text: m.fecha; font-size: 11px; width: 70px; }
+                Celda { text: m.tipo; font-size: 11px; }
+                Celda { text: m.cantidad; font-size: 11px; derecha: true; width: 50px; }
+            }
+        }
+    }
+}
+
+/// Para quien maneja el inventario pero no los productos: ve el producto y mueve su existencia, sin editarlo.
+component VerExistencias inherits Dialogo {
+    titulo: Api.editor.nombre;
+    ancho: 420px;
+    property <string> error;
+    Nota { text: Api.editor.codigo + " · " + Api.pesos(Api.editor.precio.to-float()) + (Api.editor.granel ? " por kg" : " por " + Api.editor.unidad); }
+    Existencias {
+        granel: Api.editor.granel;
+        resultado(mensaje) => { error = mensaje; }
+    }
+    if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+    HorizontalLayout {
+        alignment: end;
+        Button { text: "Cerrar"; clicked => { root.cerrar(); } }
+    }
+}
+
 component EditorProducto inherits Dialogo {
     titulo: Api.editor.id == 0 ? "Nuevo producto" : Api.editor.nombre;
     ancho: 900px;
@@ -101,41 +164,10 @@ component EditorProducto inherits Dialogo {
             }
         }
         // Columna derecha: existencias (solo productos ya guardados).
-        if Api.editor.id != 0: VerticalLayout {
+        if Api.editor.id != 0: Existencias {
             width: 250px;
-            spacing: 8px;
-            Subtitulo { text: "Existencia: " + Api.editor.existencia + " " + (granel ? "kg" : Api.editor.unidad); }
-            entrada := Campo { etiqueta: "Llegó mercancía (cantidad)"; numero: true; }
-            referencia := Campo { etiqueta: "Factura / proveedor"; }
-            Button {
-                text: "Registrar entrada";
-                enabled: entrada.text != "";
-                clicked => {
-                    error = Api.registrar-entrada(Api.editor.id, entrada.text, referencia.text);
-                    if error == "" { entrada.text = ""; referencia.text = ""; }
-                }
-            }
-            contada := Campo { etiqueta: "Conteo físico: hay realmente"; numero: true; }
-            Button {
-                text: "Ajustar existencia";
-                enabled: contada.text != "";
-                clicked => {
-                    error = Api.ajustar-existencia(Api.editor.id, contada.text, "Conteo físico");
-                    if error == "" { contada.text = ""; }
-                }
-            }
-            Text { text: "Últimos movimientos"; font-size: 12px; color: Tema.texto-2; font-weight: 700; }
-            Panel {
-                ListView {
-                    for m[i] in Api.movimientos: Renglon {
-                        indice: i;
-                        height: 24px;
-                        Celda { text: m.fecha; font-size: 11px; width: 70px; }
-                        Celda { text: m.tipo; font-size: 11px; }
-                        Celda { text: m.cantidad; font-size: 11px; derecha: true; width: 50px; }
-                    }
-                }
-            }
+            granel: granel;
+            resultado(mensaje) => { error = mensaje; }
         }
     }
     if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
@@ -242,10 +274,10 @@ export component Productos inherits Rectangle {
             spacing: 8px;
             Titulo { text: "Productos"; vertical-alignment: center; }
             Rectangle { }
-            if Api.es-admin: Button { text: "Familias"; clicked => { viendo-familias = true; } }
-            if Api.es-admin: Button { text: "Importar Excel"; clicked => { Api.elegir-importacion(); } }
-            if Api.es-admin: Button { text: "Exportar Excel"; clicked => { Api.exportar-productos(); } }
-            if Api.es-admin: Button { text: "Nuevo producto"; primary: true; clicked => { Api.editar-producto(0); } }
+            if Api.puede-productos: Button { text: "Familias"; clicked => { viendo-familias = true; } }
+            if Api.puede-productos: Button { text: "Importar Excel"; clicked => { Api.elegir-importacion(); } }
+            if Api.puede-productos: Button { text: "Exportar Excel"; clicked => { Api.exportar-productos(); } }
+            if Api.puede-productos: Button { text: "Nuevo producto"; primary: true; clicked => { Api.editar-producto(0); } }
         }
         HorizontalLayout {
             spacing: 14px;
@@ -266,7 +298,7 @@ export component Productos inherits Rectangle {
                     Columna { text: "Familia"; width: 130px; }
                     Columna { text: "Se vende"; width: 90px; }
                     Columna { text: "Precio"; width: 95px; derecha: true; }
-                    if Api.es-admin: Columna { text: "Costo"; width: 90px; derecha: true; }
+                    if Api.puede-productos: Columna { text: "Costo"; width: 90px; derecha: true; }
                     Columna { text: "Existencia"; width: 110px; derecha: true; }
                 }
                 if Api.productos.length == 0: Rectangle {
@@ -275,7 +307,7 @@ export component Productos inherits Rectangle {
                 ListView {
                     for p[i] in Api.productos: Renglon {
                         indice: i;
-                        clicked => { if Api.es-admin { Api.editar-producto(p.id); } }
+                        clicked => { if Api.puede-productos || Api.puede-inventario { Api.editar-producto(p.id); } }
                         Celda { text: p.codigo; width: 130px; tenue: true; }
                         HorizontalLayout {
                             spacing: 6px;
@@ -286,7 +318,7 @@ export component Productos inherits Rectangle {
                         Celda { text: p.familia; width: 130px; }
                         Celda { text: p.granel ? "a granel (kg)" : "por " + p.unidad; width: 90px; tenue: true; }
                         Celda { text: p.precio + (p.granel ? "/kg" : ""); width: 95px; derecha: true; }
-                        if Api.es-admin: Celda { text: p.costo; width: 90px; derecha: true; tenue: true; }
+                        if Api.puede-productos: Celda { text: p.costo; width: 90px; derecha: true; tenue: true; }
                         HorizontalLayout {
                             width: 110px;
                             alignment: end;
@@ -300,7 +332,11 @@ export component Productos inherits Rectangle {
         }
     }
 
-    if Api.editando: EditorProducto {
+    if Api.editando && Api.puede-productos: EditorProducto {
+        cerrar => { Api.cerrar-editor(); buscar(); }
+    }
+
+    if Api.editando && !Api.puede-productos: VerExistencias {
         cerrar => { Api.cerrar-editor(); buscar(); }
     }
 

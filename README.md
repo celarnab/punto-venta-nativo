@@ -28,6 +28,8 @@ navegador ni web view.
   surtido, e **importar/exportar Excel** con vista previa.
 - **Clientes**, **reportes** (por día, semana o mes, familia, producto, empleado, cliente y forma de pago, menos las
   devoluciones; se exportan a Excel) y **usuarios con PIN** (cajero o administrador).
+  - A un cajero se le pueden dar **permisos extra**: ver sus propios reportes (sin costos ni utilidad), manejar
+    productos o manejar el inventario (entradas y conteos).
 - **Impresión**: los tickets van **directo a la impresora térmica** en ESC/POS, sin diálogos, y pueden abrir el
   cajón de dinero. Sin impresora térmica salen en PDF. La cotización en hoja carta siempre es PDF.
 - **Respaldos**: uno automático cada día (se conservan 30), manual cuando se quiera, y **restaurar una base completa**

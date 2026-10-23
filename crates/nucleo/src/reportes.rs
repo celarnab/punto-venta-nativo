@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use rusqlite::types::FromSql;
 use serde::{Deserialize, Serialize};
 
+use crate::usuarios::{Permiso, Usuario};
 use crate::{Bd, Cantidad, Dinero, Error, Resultado};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,11 +63,29 @@ pub struct Apartado {
     pub filas: Vec<Fila>,
 }
 
+impl Seccion {
+    /// Lo que ve un cajero de sus propias ventas: sin la ganancia (muestra costos) ni el desglose por empleado.
+    pub const DEL_CAJERO: &[Self] = &[Self::Evolucion, Self::Familias, Self::Productos, Self::Clientes, Self::Metodos];
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Reporte {
     pub filtro: Filtro,
     pub resumen: Resumen,
     pub apartados: Vec<Apartado>,
+    /// `false` si el costo, la utilidad y el margen se ocultaron (vienen en cero).
+    pub con_costos: bool,
+}
+
+impl Reporte {
+    /// Borra lo que revela el costo de la mercancía.
+    pub fn ocultar_costos(&mut self) {
+        self.resumen.costo = Dinero::default();
+        self.resumen.utilidad = Dinero::default();
+        self.resumen.margen = None;
+        self.apartados.retain(|a| a.seccion != Seccion::Ganancia);
+        self.con_costos = false;
+    }
 }
 
 /// Lo que entra en el periodo; cada consulta parte de aquí. Las devoluciones restan en el día en que
@@ -127,7 +146,22 @@ impl Bd {
             .iter()
             .map(|&seccion| Ok(Apartado { seccion, titulo: seccion.etiqueta(), filas: consulta.apartado(seccion)? }))
             .collect::<Resultado<_>>()?;
-        Ok(Reporte { filtro: *filtro, resumen: consulta.resumen()?, apartados })
+        Ok(Reporte { filtro: *filtro, resumen: consulta.resumen()?, apartados, con_costos: true })
+    }
+
+    /// El reporte que le toca a quien lo pide: un administrador ve todo; un cajero con permiso, solo sus
+    /// ventas y sin costos. La pantalla y el Excel salen de aquí para que muestren lo mismo.
+    pub fn reporte_para(&self, usuario: &Usuario, filtro: &Filtro) -> Resultado<Reporte> {
+        if usuario.es_admin() {
+            return self.reporte(filtro, Seccion::TODOS);
+        }
+        if !usuario.puede(Permiso::VerReportes) {
+            return Err(Error::SinPermiso);
+        }
+        let propio = Filtro { cajero_id: Some(usuario.id), ..*filtro };
+        let mut reporte = self.reporte(&propio, Seccion::DEL_CAJERO)?;
+        reporte.ocultar_costos();
+        Ok(reporte)
     }
 }
 
@@ -289,6 +323,7 @@ mod tests {
     use crate::clientes::DatosCliente;
     use crate::cobro::Metodo;
     use crate::devoluciones::ADevolver;
+    use crate::usuarios::Permisos;
     use crate::ventas::tests::Tienda;
 
     fn dia(texto: &str) -> NaiveDate {
@@ -375,5 +410,36 @@ mod tests {
         assert_eq!(apartado(Seccion::Empleados), [("Carla", "121.00".into())]);
         let evolucion = &reporte.apartados.iter().find(|a| a.seccion == Seccion::Evolucion).unwrap().filas;
         assert_eq!(evolucion[0].monto, d("121"));
+    }
+
+    #[test]
+    fn un_cajero_solo_ve_sus_ventas_y_sin_costos() {
+        let mut t = Tienda::nueva();
+        t.vender(&[(&t.martillo.clone(), "1")]); // Carla: 116
+        let admin = t.bd.usuario(1).unwrap();
+        let id = t.bd.venta_en_curso(admin.id).unwrap().id;
+        t.bd.agregar(id, t.tornillo.id, c("5"), None).unwrap();
+        t.bd.cobrar(id, &Tienda::efectivo("5"), None).unwrap(); // Admin: 5
+
+        let hoy = crate::ahora().date();
+        let filtro = Filtro { desde: hoy, hasta: hoy, cajero_id: None, cliente_id: None };
+
+        let todo = t.bd.reporte_para(&admin, &filtro).unwrap();
+        assert!(todo.con_costos);
+        assert_eq!((todo.resumen.total, todo.apartados.len()), (d("121"), Seccion::TODOS.len()));
+
+        let carla = t.bd.usuario(t.cajera).unwrap();
+        assert!(matches!(t.bd.reporte_para(&carla, &filtro), Err(Error::SinPermiso)));
+
+        let carla = Usuario { permisos: Permisos { ver_reportes: true, ..Default::default() }, ..carla };
+        // Aunque pida las de otro empleado, solo ve las suyas.
+        let ajeno = Filtro { cajero_id: Some(admin.id), ..filtro };
+        let suyo = t.bd.reporte_para(&carla, &ajeno).unwrap();
+        assert_eq!(suyo.filtro.cajero_id, Some(carla.id));
+        assert_eq!((suyo.resumen.ventas, suyo.resumen.total), (1, d("116")));
+        assert!(!suyo.con_costos);
+        assert_eq!((suyo.resumen.costo, suyo.resumen.utilidad, suyo.resumen.margen), (d("0"), d("0"), None));
+        let secciones: Vec<_> = suyo.apartados.iter().map(|a| a.seccion).collect();
+        assert_eq!(secciones, Seccion::DEL_CAJERO);
     }
 }

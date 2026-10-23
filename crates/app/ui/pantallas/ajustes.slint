@@ -18,6 +18,11 @@ export component Ajustes inherits Rectangle {
     property <bool> imprimir-corte: Api.impresora.imprimir-corte;
     init => { Api.cargar-ajustes(); }
 
+    /// Cuántos permisos extra tiene un cajero.
+    pure function extras(u: UsuarioUi) -> int {
+        (u.permisos.ver-reportes ? 1 : 0) + (u.permisos.manejar-productos ? 1 : 0) + (u.permisos.manejar-inventario ? 1 : 0)
+    }
+
     function guardar-impresora() {
         Api.guardar-impresora({
             nombre: impresora == 0 ? "" : Api.impresoras[impresora],
@@ -117,6 +122,10 @@ export component Ajustes inherits Rectangle {
                                         width: 200px;
                                         alignment: end;
                                         spacing: 4px;
+                                        if !u.admin && extras(u) > 0: Insignia {
+                                            y: 6px;
+                                            text: extras(u) > 1 ? "+" + extras(u) + " permisos" : u.permisos.ver-reportes ? "+ reportes" : u.permisos.manejar-productos ? "+ productos" : "+ inventario";
+                                        }
                                         Insignia { y: 6px; text: u.admin ? "Administrador" : "Cajero"; tinta: u.admin ? Tema.acento : Tema.texto-2; fondo: u.admin ? Tema.acento-suave : Tema.panel-2; }
                                         if !u.activo: Insignia { y: 6px; text: "desactivado"; }
                                     }
@@ -166,10 +175,25 @@ export component Ajustes inherits Rectangle {
         ancho: 460px;
         property <bool> admin: usuario.admin;
         property <bool> activo: usuario.activo;
+        property <bool> ver-reportes: usuario.permisos.ver-reportes;
+        property <bool> manejar-productos: usuario.permisos.manejar-productos;
+        property <bool> manejar-inventario: usuario.permisos.manejar-inventario;
         cerrar => { editando-usuario = false; }
         nombre-usuario := Campo { etiqueta: "Nombre"; text: usuario.nombre; init => { self.enfocar(); } }
         CheckBox { text: "Administrador"; checked <=> admin; }
         Nota { text: "Un administrador además maneja productos, reportes y ajustes, y autoriza con su PIN (ventas bajo costo, cancelaciones y devoluciones)."; }
+        if !admin: VerticalLayout {
+            spacing: 3px;
+            padding-top: 4px;
+            Text { text: "Permisos extra"; font-size: 12px; color: Tema.texto-2; font-weight: 700; }
+            CheckBox { text: "Ver sus reportes"; checked <=> ver-reportes; }
+            Nota { text: "Solo sus propias ventas, sin costos ni utilidad. Puede exportarlos a Excel."; }
+            CheckBox { text: "Manejar productos"; checked <=> manejar-productos; }
+            Nota { text: "Dar de alta, editar y borrar productos y familias, importar y exportar Excel. Ve los costos."; }
+            CheckBox { text: "Manejar inventario"; checked <=> manejar-inventario; }
+            Nota { text: "Registrar entradas de mercancía y conteos físicos."; }
+            Nota { text: "Los cambios aplican la próxima vez que entre."; }
+        }
         if usuario.id != 0: CheckBox { text: "Puede entrar"; checked <=> activo; }
         pin := Campo {
             etiqueta: usuario.id == 0 ? "PIN" : "PIN nuevo";
@@ -185,7 +209,11 @@ export component Ajustes inherits Rectangle {
                 text: "Guardar";
                 primary: true;
                 clicked => {
-                    error-usuario = Api.guardar-usuario(usuario.id, nombre-usuario.text, admin, activo, pin.text);
+                    error-usuario = Api.guardar-usuario(usuario.id, nombre-usuario.text, admin, activo, {
+                        ver-reportes: ver-reportes,
+                        manejar-productos: manejar-productos,
+                        manejar-inventario: manejar-inventario,
+                    }, pin.text);
                     if error-usuario == "" { editando-usuario = false; }
                 }
             }

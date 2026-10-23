@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use nucleo::catalogo::Producto;
 use nucleo::negocios::Negocios;
 use nucleo::reportes::Filtro;
-use nucleo::usuarios::Usuario;
+use nucleo::usuarios::{Permiso, Usuario};
 use nucleo::{Bd, Cantidad, Error, Resultado};
 
 use crate::configuracion::Configuracion;
@@ -92,5 +92,10 @@ impl Estado {
 
     pub fn admin(&self) -> Resultado<&Usuario> {
         Some(self.usuario()?).filter(|u| u.es_admin()).ok_or(Error::SoloAdministrador)
+    }
+
+    /// Quien está en sesión, si es administrador o un administrador le dio este permiso.
+    pub fn permiso(&self, permiso: Permiso) -> Resultado<&Usuario> {
+        Some(self.usuario()?).filter(|u| u.puede(permiso)).ok_or(Error::SinPermiso)
     }
 }

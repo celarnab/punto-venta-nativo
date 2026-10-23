@@ -13,9 +13,9 @@ use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
 use nucleo::negocio::Negocio;
 use nucleo::negocios::BASE_DE_DATOS;
-use nucleo::reportes::{Filtro, Seccion};
+use nucleo::reportes::Filtro;
 use nucleo::texto::normalizar;
-use nucleo::usuarios::{Autorizacion, DatosUsuario, Rol};
+use nucleo::usuarios::{Autorizacion, DatosUsuario, Permiso, Permisos, Rol};
 use nucleo::ventas::Estado as EstadoVenta;
 use nucleo::{Bd, Cantidad, Dinero, Error, Porcentaje, Resultado, exportacion, importacion};
 use slint::{ComponentHandle, Model, SharedString, Timer};
@@ -502,16 +502,18 @@ pub fn conectar(app: &App, estado: Compartido) {
     });
     conectar!(api, app, estado, on_guardar_producto, |app, e, editor| {
         let resultado =
-            e.admin().map(|_| ()).and_then(|()| datos_producto(&e, &editor)).and_then(|datos| match editor.id {
-                0 => e.bd.crear_producto(&datos),
-                id => e.bd.actualizar_producto(id.into(), &datos),
-            });
+            e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| datos_producto(&e, &editor)).and_then(
+                |datos| match editor.id {
+                    0 => e.bd.crear_producto(&datos),
+                    id => e.bd.actualizar_producto(id.into(), &datos),
+                },
+            );
         let mensaje = texto_de(&app, resultado.map(|p| format!("{} guardado.", p.nombre)));
         refrescar_productos(&app, &e);
         mensaje
     });
     conectar!(api, app, estado, on_borrar_producto, |app, e, id| {
-        let resultado = e.admin().map(|_| ()).and_then(|()| e.bd.borrar_producto(id.into()));
+        let resultado = e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| e.bd.borrar_producto(id.into()));
         let mensaje = texto_de(&app, resultado.map(|()| "Producto borrado."));
         refrescar_productos(&app, &e);
         mensaje
@@ -537,7 +539,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         }
     });
     conectar!(api, app, estado, on_crear_familia, |app, e, nombre, alerta| {
-        let resultado = e.admin().map(|_| ()).and_then(|()| {
+        let resultado = e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| {
             let alerta = opcional::<Cantidad>(&alerta)?;
             e.bd.crear_familia(&DatosFamilia { nombre: nombre.into(), alerta_stock: alerta })
         });
@@ -554,7 +556,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         }
     });
     conectar!(api, app, estado, on_renombrar_familia, |app, e, id, nombre, alerta| {
-        let resultado = e.admin().map(|_| ()).and_then(|()| {
+        let resultado = e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| {
             let alerta = opcional::<Cantidad>(&alerta)?;
             e.bd.actualizar_familia(id.into(), &DatosFamilia { nombre: nombre.into(), alerta_stock: alerta })
         });
@@ -563,14 +565,16 @@ pub fn conectar(app: &App, estado: Compartido) {
         mensaje
     });
     conectar!(api, app, estado, on_borrar_familia, |app, e, id| {
-        if let Err(error) = e.admin().map(|_| ()).and_then(|()| e.bd.borrar_familia(id.into())) {
+        if let Err(error) =
+            e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| e.bd.borrar_familia(id.into()))
+        {
             avisar(&app, error.to_string(), true);
         }
         refrescar_familias(&app, &e);
     });
     conectar!(api, app, estado, on_registrar_entrada, |app, e, id, cantidad, referencia| {
         let resultado = e
-            .admin()
+            .permiso(Permiso::ManejarInventario)
             .map(|_| ())
             .and_then(|()| leer::<Cantidad>(&cantidad))
             .and_then(|cantidad| e.bd.registrar_entrada(id.into(), cantidad, &referencia));
@@ -583,7 +587,7 @@ pub fn conectar(app: &App, estado: Compartido) {
     });
     conectar!(api, app, estado, on_ajustar_existencia, |app, e, id, contada, motivo| {
         let resultado = e
-            .admin()
+            .permiso(Permiso::ManejarInventario)
             .map(|_| ())
             .and_then(|()| leer::<Cantidad>(&contada))
             .and_then(|contada| e.bd.ajustar_existencia(id.into(), contada, &motivo));
@@ -595,8 +599,8 @@ pub fn conectar(app: &App, estado: Compartido) {
         mensaje
     });
     conectar!(api, app, estado, on_elegir_importacion, |app, e| {
-        if e.admin().is_err() {
-            return;
+        if let Err(error) = e.permiso(Permiso::ManejarProductos) {
+            return avisar(&app, error.to_string(), true);
         }
         let elegido = rfd::FileDialog::new()
             .set_title("Importar productos")
@@ -618,7 +622,11 @@ pub fn conectar(app: &App, estado: Compartido) {
     });
     conectar!(api, app, estado, on_confirmar_importacion, |app, e| {
         let Some(ruta) = e.importacion.take() else { return };
-        let resultado = importacion::leer_excel(&ruta).and_then(|renglones| e.bd.importar(&renglones));
+        let resultado = e
+            .permiso(Permiso::ManejarProductos)
+            .map(|_| ())
+            .and_then(|()| importacion::leer_excel(&ruta))
+            .and_then(|renglones| e.bd.importar(&renglones));
         texto_de(
             &app,
             resultado.map(|v| format!("Listo: {} productos nuevos y {} actualizados.", v.crear, v.actualizar)),
@@ -631,6 +639,9 @@ pub fn conectar(app: &App, estado: Compartido) {
         app.global::<Api>().set_importando(false);
     });
     conectar!(api, app, estado, on_exportar_productos, |app, e| {
+        if let Err(error) = e.permiso(Permiso::ManejarProductos) {
+            return avisar(&app, error.to_string(), true);
+        }
         let nombre = format!("productos-{}.xlsx", vista::hoy());
         if let Some(ruta) = guardar_como("Excel", "xlsx", &nombre) {
             let resultado =
@@ -662,8 +673,8 @@ pub fn conectar(app: &App, estado: Compartido) {
         let resultado = rango(periodo, &desde, &hasta).and_then(|(desde, hasta)| {
             let cajero_id = e.cajeros.get(cajero as usize).copied().filter(|&id| id != 0);
             let filtro = Filtro { desde, hasta, cajero_id, cliente_id: None };
-            let reporte = e.bd.reporte(&filtro, Seccion::TODOS)?;
-            e.reporte = Some(filtro);
+            let reporte = e.bd.reporte_para(e.usuario()?, &filtro)?;
+            e.reporte = Some(reporte.filtro);
             Ok(reporte)
         });
         match resultado {
@@ -675,10 +686,11 @@ pub fn conectar(app: &App, estado: Compartido) {
         let Some(filtro) = e.reporte else { return };
         let nombre = format!("reporte-{}-al-{}.xlsx", filtro.desde, filtro.hasta);
         if let Some(ruta) = guardar_como("Excel", "xlsx", &nombre) {
-            let resultado =
-                e.bd.reporte(&filtro, Seccion::TODOS)
-                    .and_then(|r| exportacion::reporte_a_excel(&r))
-                    .and_then(|bytes| escribir(&ruta, bytes));
+            let resultado = e
+                .usuario()
+                .and_then(|usuario| e.bd.reporte_para(usuario, &filtro))
+                .and_then(|r| exportacion::reporte_a_excel(&r))
+                .and_then(|bytes| escribir(&ruta, bytes));
             texto_de(&app, resultado.map(|()| "Reporte exportado."));
         }
     });
@@ -705,11 +717,16 @@ pub fn conectar(app: &App, estado: Compartido) {
         }
         mensaje
     });
-    conectar!(api, app, estado, on_guardar_usuario, |app, e, id, nombre, admin, activo, pin| {
+    conectar!(api, app, estado, on_guardar_usuario, |app, e, id, nombre, admin, activo, permisos, pin| {
         let datos = DatosUsuario {
             nombre: nombre.into(),
             rol: if admin { Rol::Administrador } else { Rol::Cajero },
             activo: id == 0 || activo,
+            permisos: Permisos {
+                ver_reportes: permisos.ver_reportes,
+                manejar_productos: permisos.manejar_productos,
+                manejar_inventario: permisos.manejar_inventario,
+            },
         };
         let resultado = e.admin().map(|_| ()).and_then(|()| match id {
             0 => e.bd.crear_usuario(&datos, &pin).map(drop),
@@ -789,8 +806,10 @@ fn configurar(e: &mut Estado, negocio: &str, nombre: &str, pin: &str) -> Resulta
     }
     let actual = e.bd.negocio()?;
     e.bd.guardar_negocio(&Negocio { nombre: negocio.into(), ..actual })?;
-    let admin =
-        e.bd.crear_usuario(&DatosUsuario { nombre: nombre.into(), rol: Rol::Administrador, activo: true }, pin)?;
+    let admin = e.bd.crear_usuario(
+        &DatosUsuario { nombre: nombre.into(), rol: Rol::Administrador, activo: true, permisos: Permisos::default() },
+        pin,
+    )?;
     e.sesion = Some(admin);
     Ok(())
 }
@@ -859,8 +878,12 @@ fn refrescar_inicio(app: &App, e: &Estado) {
 fn entrar_como(app: &App, e: &mut Estado) {
     let Some(usuario) = e.sesion.clone() else { return };
     let api = app.global::<Api>();
-    api.set_usuario(usuario.nombre.into());
-    api.set_es_admin(usuario.rol == Rol::Administrador);
+    api.set_usuario(usuario.nombre.as_str().into());
+    api.set_es_admin(usuario.es_admin());
+    api.set_puede_reportes(usuario.puede(Permiso::VerReportes));
+    api.set_puede_productos(usuario.puede(Permiso::ManejarProductos));
+    api.set_puede_inventario(usuario.puede(Permiso::ManejarInventario));
+    api.set_reporte_propio(!usuario.es_admin());
     api.set_pantalla("venta".into());
     api.set_hay_sesion(true);
     e.venta_id = None;
@@ -1144,9 +1167,12 @@ fn refrescar_familias(app: &App, e: &Estado) {
     api.set_familias_nombres(vista::modelo(nombres));
 }
 
+/// Abre el editor para quien maneja productos, o solo para ver y mover existencias si maneja el inventario.
 fn abrir_editor(app: &App, e: &mut Estado, id: i64) {
-    if let Err(error) = e.admin() {
-        return avisar(app, error.to_string(), true);
+    let productos = e.permiso(Permiso::ManejarProductos).is_ok();
+    let inventario = id != 0 && e.permiso(Permiso::ManejarInventario).is_ok();
+    if !productos && !inventario {
+        return avisar(app, Error::SinPermiso.to_string(), true);
     }
     refrescar_familias(app, e);
     let familias = e.bd.familias().unwrap_or_default();
@@ -1177,7 +1203,8 @@ fn abrir_editor(app: &App, e: &mut Estado, id: i64) {
             granel: p.granel,
             unidad: p.unidad.as_str().into(),
             precio: p.precio.to_string().into(),
-            costo: p.costo.to_string().into(),
+            // El costo solo lo ve quien da de alta productos.
+            costo: if productos { p.costo.to_string().into() } else { SharedString::new() },
             stock_minimo: texto_de(p.stock_minimo).into(),
             stock_maximo: texto_de(p.stock_maximo).into(),
             alerta: texto_de(p.alerta_stock).into(),

@@ -1,12 +1,20 @@
 // Lo que la interfaz muestra y lo que puede pedir. Rust llena las propiedades y atiende los callbacks;
 // los montos y cantidades viajan como texto ya formateado («$1,234.50», «0.75 kg»).
 
+/// Lo que un administrador le da a un cajero además de vender.
+export struct PermisosUi {
+    ver-reportes: bool,       // sus propias ventas, sin costos
+    manejar-productos: bool,  // alta, edición, familias, importar/exportar, ver costos
+    manejar-inventario: bool, // entradas y conteos físicos
+}
+
 export struct UsuarioUi {
     id: int,
     nombre: string,
     rol: string,
     admin: bool,
     activo: bool,
+    permisos: PermisosUi,
 }
 
 export struct PrecioUi {
@@ -201,6 +209,10 @@ export global Api {
     in property <bool> hay-usuarios: true;
     in property <bool> hay-sesion;
     in property <bool> es-admin;
+    in property <bool> puede-reportes;   // admin, o cajero con «Ver sus reportes»
+    in property <bool> puede-productos;  // admin, o cajero con «Manejar productos»
+    in property <bool> puede-inventario; // admin, o cajero con «Manejar inventario»
+    in property <bool> reporte-propio;   // el reporte se limita a las ventas de quien entró
     in property <string> usuario;
     in property <string> negocio-nombre;
     in property <string> fecha-larga;
@@ -350,7 +362,7 @@ export global Api {
     in property <string> carpeta-datos;
     callback cargar-ajustes();
     callback guardar-negocio(NegocioUi) -> string;
-    callback guardar-usuario(int, string, bool, bool, string) -> string; // id (0 nuevo), nombre, admin, activo, pin
+    callback guardar-usuario(int, string, bool, bool, PermisosUi, string) -> string; // id (0 nuevo), nombre, admin, activo, permisos, pin
     callback guardar-impresora(ImpresoraUi);
     callback probar-impresora();
     callback respaldar();

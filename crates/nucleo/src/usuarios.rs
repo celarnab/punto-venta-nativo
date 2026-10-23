@@ -15,17 +15,50 @@ enum_texto! {
     }
 }
 
+enum_texto! {
+    /// Lo que un administrador le puede dar a un cajero además de vender.
+    pub enum Permiso {
+        VerReportes = "ver_reportes", "Ver sus reportes";
+        ManejarProductos = "manejar_productos", "Manejar productos";
+        ManejarInventario = "manejar_inventario", "Manejar inventario";
+    }
+}
+
+/// Permisos extra de un cajero. Los de un administrador siempre van en `false` (ya puede todo).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Permisos {
+    pub ver_reportes: bool,
+    pub manejar_productos: bool,
+    pub manejar_inventario: bool,
+}
+
+impl Permisos {
+    pub const fn tiene(self, permiso: Permiso) -> bool {
+        match permiso {
+            Permiso::VerReportes => self.ver_reportes,
+            Permiso::ManejarProductos => self.manejar_productos,
+            Permiso::ManejarInventario => self.manejar_inventario,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Usuario {
     pub id: i64,
     pub nombre: String,
     pub rol: Rol,
     pub activo: bool,
+    pub permisos: Permisos,
 }
 
 impl Usuario {
     pub fn es_admin(&self) -> bool {
         self.rol == Rol::Administrador
+    }
+
+    /// Un administrador puede todo; un cajero, lo que le hayan dado.
+    pub fn puede(&self, permiso: Permiso) -> bool {
+        self.es_admin() || self.permisos.tiene(permiso)
     }
 
     fn de_fila(fila: &Row) -> rusqlite::Result<Self> {
@@ -34,6 +67,11 @@ impl Usuario {
             nombre: fila.get("nombre")?,
             rol: fila.get("rol")?,
             activo: fila.get("activo")?,
+            permisos: Permisos {
+                ver_reportes: fila.get("ver_reportes")?,
+                manejar_productos: fila.get("manejar_productos")?,
+                manejar_inventario: fila.get("manejar_inventario")?,
+            },
         })
     }
 }
@@ -43,6 +81,15 @@ pub struct DatosUsuario {
     pub nombre: String,
     pub rol: Rol,
     pub activo: bool,
+    #[serde(default)]
+    pub permisos: Permisos,
+}
+
+impl DatosUsuario {
+    /// Lo que se guarda: un administrador no lleva permisos extra, para que no reaparezcan si deja de serlo.
+    fn permisos_a_guardar(&self, rol: Rol) -> Permisos {
+        if rol == Rol::Administrador { Permisos::default() } else { self.permisos }
+    }
 }
 
 /// Prueba de que un administrador puso su PIN; solo [`Bd::autorizar`] la puede crear.
@@ -71,11 +118,21 @@ impl Bd {
     pub fn crear_usuario(&mut self, datos: &DatosUsuario, pin: &str) -> Resultado<Usuario> {
         let nombre = validar_nombre(&datos.nombre)?;
         let rol = if self.hay_usuarios()? { datos.rol } else { Rol::Administrador };
+        let permisos = datos.permisos_a_guardar(rol);
         let hash = cifrar(pin)?;
         self.conn()
             .execute(
-                "INSERT INTO usuarios (nombre, rol, pin_hash, activo) VALUES (?1, ?2, ?3, ?4)",
-                params![nombre, rol, hash, datos.activo],
+                "INSERT INTO usuarios (nombre, rol, pin_hash, activo, ver_reportes, manejar_productos, manejar_inventario)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    nombre,
+                    rol,
+                    hash,
+                    datos.activo,
+                    permisos.ver_reportes,
+                    permisos.manejar_productos,
+                    permisos.manejar_inventario
+                ],
             )
             .map_err(duplicado(|| format!("Ya existe un usuario llamado {nombre}.")))?;
         self.usuario(self.conn().last_insert_rowid())
@@ -83,10 +140,21 @@ impl Bd {
 
     pub fn actualizar_usuario(&mut self, id: i64, datos: &DatosUsuario) -> Resultado<Usuario> {
         let nombre = validar_nombre(&datos.nombre)?;
+        let permisos = datos.permisos_a_guardar(datos.rol);
         self.transaccion(|tx| {
             tx.execute(
-                "UPDATE usuarios SET nombre = ?2, rol = ?3, activo = ?4 WHERE id = ?1",
-                params![id, nombre, datos.rol, datos.activo],
+                "UPDATE usuarios SET nombre = ?2, rol = ?3, activo = ?4,
+                    ver_reportes = ?5, manejar_productos = ?6, manejar_inventario = ?7
+                 WHERE id = ?1",
+                params![
+                    id,
+                    nombre,
+                    datos.rol,
+                    datos.activo,
+                    permisos.ver_reportes,
+                    permisos.manejar_productos,
+                    permisos.manejar_inventario
+                ],
             )
             .map_err(duplicado(|| format!("Ya existe un usuario llamado {nombre}.")))?;
             let admins: i64 =
@@ -165,7 +233,7 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn datos(nombre: &str, rol: Rol) -> DatosUsuario {
-        DatosUsuario { nombre: nombre.into(), rol, activo: true }
+        DatosUsuario { nombre: nombre.into(), rol, activo: true, permisos: Permisos::default() }
     }
 
     #[test]
@@ -215,5 +283,55 @@ pub(crate) mod tests {
         let ana = bd.crear_usuario(&datos("Ana", Rol::Administrador), "1234").unwrap();
         assert!(bd.actualizar_usuario(ana.id, &datos("Ana", Rol::Cajero)).is_err());
         assert!(bd.usuario(ana.id).unwrap().es_admin()); // la transacción se deshizo
+    }
+
+    #[test]
+    fn un_cajero_empieza_sin_permisos_extra() {
+        let mut bd = Bd::en_memoria().unwrap();
+        bd.crear_usuario(&datos("Ana", Rol::Administrador), "1234").unwrap();
+        let beto = bd.crear_usuario(&datos("Beto", Rol::Cajero), "5678").unwrap();
+        assert_eq!(beto.permisos, Permisos::default());
+        assert!(Permiso::TODOS.iter().all(|&p| !beto.puede(p)));
+    }
+
+    #[test]
+    fn el_administrador_puede_todo() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let ana = bd.crear_usuario(&datos("Ana", Rol::Administrador), "1234").unwrap();
+        assert!(Permiso::TODOS.iter().all(|&p| ana.puede(p)));
+    }
+
+    #[test]
+    fn se_guardan_los_permisos_de_un_cajero() {
+        let mut bd = Bd::en_memoria().unwrap();
+        bd.crear_usuario(&datos("Ana", Rol::Administrador), "1234").unwrap();
+        let reportes = Permisos { ver_reportes: true, ..Default::default() };
+        let beto =
+            bd.crear_usuario(&DatosUsuario { permisos: reportes, ..datos("Beto", Rol::Cajero) }, "5678").unwrap();
+        assert!(beto.puede(Permiso::VerReportes));
+        assert!(!beto.puede(Permiso::ManejarProductos));
+        assert_eq!(bd.entrar(beto.id, "5678").unwrap().permisos, reportes);
+
+        let inventario = Permisos { manejar_inventario: true, ..Default::default() };
+        let beto = bd.actualizar_usuario(beto.id, &DatosUsuario { permisos: inventario, ..datos("Beto", Rol::Cajero) });
+        let beto = beto.unwrap();
+        assert!(!beto.puede(Permiso::VerReportes));
+        assert!(beto.puede(Permiso::ManejarInventario));
+    }
+
+    #[test]
+    fn al_volverse_administrador_se_limpian_los_permisos() {
+        let mut bd = Bd::en_memoria().unwrap();
+        bd.crear_usuario(&datos("Ana", Rol::Administrador), "1234").unwrap();
+        let todos = Permisos { ver_reportes: true, manejar_productos: true, manejar_inventario: true };
+        let beto = bd.crear_usuario(&DatosUsuario { permisos: todos, ..datos("Beto", Rol::Cajero) }, "5678").unwrap();
+
+        let beto =
+            bd.actualizar_usuario(beto.id, &DatosUsuario { permisos: todos, ..datos("Beto", Rol::Administrador) });
+        assert_eq!(beto.unwrap().permisos, Permisos::default());
+        // Si deja de ser administrador, no recupera solo lo que tenía.
+        let beto = bd.usuarios().unwrap().into_iter().find(|u| u.nombre == "Beto").unwrap();
+        let beto = bd.actualizar_usuario(beto.id, &datos("Beto", Rol::Cajero)).unwrap();
+        assert!(Permiso::TODOS.iter().all(|&p| !beto.puede(p)));
     }
 }

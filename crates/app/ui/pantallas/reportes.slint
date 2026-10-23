@@ -98,7 +98,7 @@ export component Reportes inherits Rectangle {
         spacing: 10px;
         HorizontalLayout {
             spacing: 8px;
-            Titulo { text: "Reportes"; vertical-alignment: center; }
+            Titulo { text: Api.reporte-propio ? "Mis reportes" : "Reportes"; vertical-alignment: center; }
             Nota { text: Api.reporte.periodo; vertical-alignment: center; }
             Rectangle { }
             Button { text: "Exportar a Excel"; clicked => { Api.exportar-reporte(); } }
@@ -116,7 +116,8 @@ export component Reportes inherits Rectangle {
             hasta := LineEdit { width: 110px; placeholder-text: "AAAA-MM-DD"; enabled: periodo == 6; accepted => { cargar(); } }
             if periodo == 6: Button { text: "Ver"; clicked => { cargar(); } }
             Rectangle { }
-            ComboBox { width: 200px; model: Api.cajeros-filtro; current-index <=> cajero; selected => { cargar(); } }
+            if !Api.reporte-propio: ComboBox { width: 200px; model: Api.cajeros-filtro; current-index <=> cajero; selected => { cargar(); } }
+            if Api.reporte-propio: Nota { text: "Solo tus ventas · " + Api.usuario; vertical-alignment: center; }
         }
         ScrollView {
             VerticalLayout {
@@ -131,7 +132,7 @@ export component Reportes inherits Rectangle {
                     }
                     Cifra { etiqueta: "Ventas"; valor: Api.reporte.ventas; }
                     Cifra { etiqueta: "Ticket promedio"; valor: Api.reporte.promedio; }
-                    Cifra { etiqueta: "Utilidad"; valor: Api.reporte.utilidad; detalle: Api.reporte.margen; }
+                    if Api.reporte.utilidad != "": Cifra { etiqueta: "Utilidad"; valor: Api.reporte.utilidad; detalle: Api.reporte.margen; }
                 }
                 if Api.reporte.apartados.length > 0: Columnas { apartado: Api.reporte.apartados[0]; }
                 GridLayout {

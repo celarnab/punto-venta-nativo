@@ -24,6 +24,9 @@ pub enum Error {
     #[error("Solo un administrador puede hacer esto.")]
     SoloAdministrador,
 
+    #[error("No tienes permiso para hacer esto. Pídeselo a un administrador.")]
+    SinPermiso,
+
     #[error("Base de datos: {0}")]
     Bd(#[from] rusqlite::Error),
 
@@ -48,6 +51,7 @@ impl Error {
             Self::PinIncorrecto => "pin_incorrecto",
             Self::SinSesion => "sin_sesion",
             Self::SoloAdministrador => "solo_administrador",
+            Self::SinPermiso => "sin_permiso",
             Self::Bd(_) | Self::Migracion(_) | Self::Excel(_) => "interno",
         }
     }

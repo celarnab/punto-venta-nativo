@@ -73,7 +73,7 @@ export component Principal inherits Rectangle {
                 Opcion { clave: "caja"; text: "Caja"; }
                 Opcion { clave: "productos"; text: "Productos"; }
                 Opcion { clave: "clientes"; text: "Clientes"; }
-                if Api.es-admin: Opcion { clave: "reportes"; text: "Reportes"; }
+                if Api.puede-reportes: Opcion { clave: "reportes"; text: Api.reporte-propio ? "Mis reportes" : "Reportes"; }
                 if Api.es-admin: Opcion { clave: "ajustes"; text: "Ajustes"; }
                 Rectangle { }
                 Rectangle {

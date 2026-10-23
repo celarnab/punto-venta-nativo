@@ -10,7 +10,7 @@ use nucleo::catalogo::{DatosFamilia, DatosProducto, OtroPrecio};
 use nucleo::clientes::DatosCliente;
 use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
-use nucleo::usuarios::{DatosUsuario, Rol};
+use nucleo::usuarios::{DatosUsuario, Permisos, Rol};
 use nucleo::{Bd, Cantidad, Dinero};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -114,6 +114,18 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
             _ => {}
         }
     }
+    // Un cajero con «Ver sus reportes» y «Manejar inventario»: solo sus ventas y sin costos; en productos mueve
+    // existencias, pero no edita ni ve costos.
+    api.invoke_salir();
+    api.invoke_entrar(ids.jorge as i32, "5678".into());
+    api.set_pantalla("reportes".into());
+    foto("19-cajero-reportes")?;
+    api.set_pantalla("productos".into());
+    foto("20-cajero-productos")?;
+    api.invoke_editar_producto(ids.tornillo as i32);
+    foto("21-cajero-existencias")?;
+    api.invoke_cerrar_editor();
+
     // Varios negocios: la lista desde la entrada y la configuración de uno nuevo (al final, porque cambiar de
     // negocio cierra la base de ejemplo).
     api.invoke_salir();
@@ -161,6 +173,7 @@ fn guardar(ventana: &MinimalSoftwareWindow, ruta: &Path) -> Result<(), Box<dyn s
 
 struct Ids {
     vianet: i64,
+    jorge: i64,
     tornillo: i64,
     venta_con_devolucion: i64,
 }
@@ -177,9 +190,16 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     negocio.telefono = "555 123 4567".into();
     bd.guardar_negocio(&negocio)?;
 
-    let vianet =
-        bd.crear_usuario(&DatosUsuario { nombre: "Vianet".into(), rol: Rol::Administrador, activo: true }, "1234")?;
-    let jorge = bd.crear_usuario(&DatosUsuario { nombre: "Jorge".into(), rol: Rol::Cajero, activo: true }, "5678")?;
+    let vianet = bd.crear_usuario(
+        &DatosUsuario { nombre: "Vianet".into(), rol: Rol::Administrador, activo: true, permisos: Permisos::default() },
+        "1234",
+    )?;
+    // Un cajero con permisos extra, para que se vean en Ajustes y en sus propias pantallas.
+    let reportes = Permisos { ver_reportes: true, manejar_inventario: true, ..Default::default() };
+    let jorge = bd.crear_usuario(
+        &DatosUsuario { nombre: "Jorge".into(), rol: Rol::Cajero, activo: true, permisos: reportes },
+        "5678",
+    )?;
     let familia = |bd: &mut Bd, nombre: &str| {
         bd.crear_familia(&DatosFamilia { nombre: nombre.into(), alerta_stock: Some(c("5")) })
     };
@@ -262,5 +282,5 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     bd.agregar(pausada, tornillo.id, c("40"), None)?;
     bd.pausar(pausada, "Señor de la camioneta roja")?;
 
-    Ok((bd, Ids { vianet: vianet.id, tornillo: tornillo.id, venta_con_devolucion: con_devolucion.id }))
+    Ok((bd, Ids { vianet: vianet.id, jorge: jorge.id, tornillo: tornillo.id, venta_con_devolucion: con_devolucion.id }))
 }

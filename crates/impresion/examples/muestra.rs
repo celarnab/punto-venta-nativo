@@ -8,7 +8,7 @@ use impresion::{corte, devolucion, pdf, ticket};
 use nucleo::catalogo::{DatosProducto, OtroPrecio};
 use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
-use nucleo::usuarios::{DatosUsuario, Rol};
+use nucleo::usuarios::{DatosUsuario, Permisos, Rol};
 use nucleo::{Bd, Cantidad, Dinero};
 
 fn main() {
@@ -25,7 +25,15 @@ fn main() {
     negocio.rfc = "TUE010101AB1".into();
     bd.guardar_negocio(&negocio).unwrap();
     let vianet = bd
-        .crear_usuario(&DatosUsuario { nombre: "Vianet".into(), rol: Rol::Administrador, activo: true }, "1234")
+        .crear_usuario(
+            &DatosUsuario {
+                nombre: "Vianet".into(),
+                rol: Rol::Administrador,
+                activo: true,
+                permisos: Permisos::default(),
+            },
+            "1234",
+        )
         .unwrap();
     bd.abrir_caja(vianet.id, d("500")).unwrap();
 

@@ -13,8 +13,8 @@ use nucleo::{Cantidad, Dinero};
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::{
-    ApartadoUi, ClienteUi, CorteUi, FamiliaUi, FilaUi, ImportacionUi, MovimientoUi, PartidaUi, ProductoUi, ReporteUi,
-    UsuarioUi, VentaUi,
+    ApartadoUi, ClienteUi, CorteUi, FamiliaUi, FilaUi, ImportacionUi, MovimientoUi, PartidaUi, PermisosUi, ProductoUi,
+    ReporteUi, UsuarioUi, VentaUi,
 };
 
 pub fn modelo<T: Clone + 'static>(elementos: impl IntoIterator<Item = T>) -> ModelRc<T> {
@@ -60,6 +60,11 @@ pub fn usuario(u: &Usuario) -> UsuarioUi {
         rol: texto(u.rol.etiqueta()),
         admin: u.es_admin(),
         activo: u.activo,
+        permisos: PermisosUi {
+            ver_reportes: u.permisos.ver_reportes,
+            manejar_productos: u.permisos.manejar_productos,
+            manejar_inventario: u.permisos.manejar_inventario,
+        },
     }
 }
 
@@ -250,7 +255,8 @@ pub fn reporte(r: &Reporte) -> ReporteUi {
         devoluciones: pesos(rs.devoluciones),
         total: pesos(rs.total),
         promedio: pesos(rs.promedio),
-        utilidad: pesos(rs.utilidad),
+        // Vacíos si al usuario no le toca ver costos; la pantalla esconde la cifra.
+        utilidad: if r.con_costos { pesos(rs.utilidad) } else { SharedString::new() },
         margen: texto(rs.margen.map(|m| format!("{m:.1} % de margen")).unwrap_or_default()),
         apartados: modelo(r.apartados.iter().map(|a| ApartadoUi { titulo: texto(a.titulo), filas: barras(&a.filas) })),
     }

@@ -39,14 +39,15 @@ pub fn reporte_a_excel(reporte: &Reporte) -> Resultado<Vec<u8>> {
     hoja.write_string_with_format(0, 0, "Periodo", &negrita())?;
     hoja.write_string(0, 1, &periodo)?;
 
-    let montos = [
+    let mut montos = vec![
         ("Vendido", r.vendido),
         ("Devoluciones", r.devoluciones),
         ("Total", r.total),
         ("Ticket promedio", r.promedio),
-        ("Costo", r.costo),
-        ("Utilidad", r.utilidad),
     ];
+    if reporte.con_costos {
+        montos.extend([("Costo", r.costo), ("Utilidad", r.utilidad)]);
+    }
     hoja.write_string_with_format(2, 0, "Ventas", &negrita())?;
     hoja.write_number(2, 1, r.ventas as f64)?;
     hoja.write_string_with_format(3, 0, "Artículos", &negrita())?;
@@ -55,7 +56,7 @@ pub fn reporte_a_excel(reporte: &Reporte) -> Resultado<Vec<u8>> {
         hoja.write_string_with_format(fila, 0, etiqueta, &negrita())?;
         hoja.write_number_with_format(fila, 1, monto.como_f64(), &pesos())?;
     }
-    if let Some(margen) = r.margen {
+    if let Some(margen) = r.margen.filter(|_| reporte.con_costos) {
         hoja.write_string_with_format(10, 0, "Margen", &negrita())?;
         hoja.write_number_with_format(10, 1, margen / 100.0, &Format::new().set_num_format("0.0%"))?;
     }
@@ -163,5 +164,35 @@ mod tests {
         let reporte = t.bd.reporte(&filtro, Seccion::TODOS).unwrap();
         let bytes = reporte_a_excel(&reporte).unwrap();
         assert!(bytes.starts_with(b"PK")); // un .xlsx es un zip
+        assert!(textos(&bytes).iter().any(|t| t == "Utilidad"));
+    }
+
+    #[test]
+    fn el_reporte_sin_costos_no_los_exporta() {
+        let mut t = Tienda::nueva();
+        t.vender(&[(&t.martillo.clone(), "1")]);
+        let hoy = crate::ahora().date();
+        let filtro = Filtro { desde: hoy, hasta: hoy, cajero_id: None, cliente_id: None };
+        let mut reporte = t.bd.reporte(&filtro, Seccion::TODOS).unwrap();
+        reporte.ocultar_costos();
+        let textos = textos(&reporte_a_excel(&reporte).unwrap());
+        assert!(textos.iter().any(|t| t == "Total"));
+        for oculto in ["Costo", "Utilidad", "Margen", Seccion::Ganancia.etiqueta()] {
+            assert!(!textos.iter().any(|t| t == oculto), "{oculto}");
+        }
+    }
+
+    /// Todos los textos del libro, de todas las hojas, más el nombre de cada hoja.
+    fn textos(bytes: &[u8]) -> Vec<String> {
+        use calamine::{Data, Reader, Xlsx};
+        let mut libro = Xlsx::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let mut textos = libro.sheet_names();
+        for (_, hoja) in libro.worksheets() {
+            textos.extend(hoja.used_cells().filter_map(|(_, _, c)| match c {
+                Data::String(s) => Some(s.clone()),
+                _ => None,
+            }));
+        }
+        textos
     }
 }

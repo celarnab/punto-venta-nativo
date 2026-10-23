@@ -2577,7 +2577,7 @@ checksum = "6e44b0a4eaa4c82f441d50a963f2d5f05a787240aeee097597033e72accfd22f"
 
 [[package]]
 name = "impresion"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "nucleo",
@@ -3206,7 +3206,7 @@ dependencies = [
 
 [[package]]
 name = "nucleo"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "argon2",
  "calamine",
@@ -4081,7 +4081,7 @@ dependencies = [
 
 [[package]]
 name = "punto-venta"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "directories",

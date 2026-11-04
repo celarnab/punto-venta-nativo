@@ -219,6 +219,7 @@ enum_texto! {
         Ajuste = "ajuste", "Ajuste";
         Cancelacion = "cancelacion", "Cancelación";
         Devolucion = "devolucion", "Devolución";
+        Caducidad = "caducidad", "Caducidad";
     }
 }
 
@@ -365,24 +366,16 @@ impl Bd {
     /// Lo quita del catálogo. Las ventas y movimientos que ya tiene se conservan en el historial;
     /// de las ventas en curso o en pausa se quita. Su código queda libre para otro producto.
     pub fn borrar_producto(&mut self, id: i64) -> Resultado<()> {
+        self.transaccion(|tx| borrar(tx, id))
+    }
+
+    /// Borra varios de una vez, como `borrar_producto`: o se borran todos o ninguno.
+    pub fn borrar_productos(&mut self, ids: &[i64]) -> Resultado<usize> {
         self.transaccion(|tx| {
-            let borrados = tx.execute(
-                "UPDATE productos SET borrado_en = ?2, activo = 0 WHERE id = ?1 AND borrado_en IS NULL",
-                params![id, ahora()],
-            )?;
-            if borrados == 0 {
-                return Err(Error::NoEncontrado("Producto"));
+            for &id in ids {
+                borrar(tx, id)?;
             }
-            let mut sentencia = tx.prepare(
-                "SELECT DISTINCT pa.venta_id FROM partidas pa JOIN ventas v ON v.id = pa.venta_id
-                 WHERE pa.producto_id = ?1 AND v.estado IN ('abierta', 'pausada')",
-            )?;
-            let pendientes: Vec<i64> = sentencia.query_map([id], |f| f.get(0))?.collect::<rusqlite::Result<_>>()?;
-            for venta_id in pendientes {
-                tx.execute("DELETE FROM partidas WHERE venta_id = ?1 AND producto_id = ?2", [venta_id, id])?;
-                crate::ventas::recalcular(tx, venta_id)?;
-            }
-            Ok(())
+            Ok(ids.len())
         })
     }
 
@@ -400,9 +393,17 @@ impl Bd {
     }
 
     /// Corrige la existencia a lo que se contó físicamente; queda la diferencia como ajuste.
+    /// Lo que está en lotes se cuenta lote por lote ([`Bd::contar_lote`]): aquí no puede quedar por debajo.
     pub fn ajustar_existencia(&mut self, id: i64, contada: Cantidad, motivo: &str) -> Resultado<Producto> {
         self.transaccion(|tx| {
             let producto = cargar(tx, id)?;
+            let en_lotes = crate::lotes::en_lotes(tx, id)?;
+            if contada < en_lotes {
+                return Err(Error::invalido(format!(
+                    "Hay {en_lotes} {} en lotes: cuéntalos lote por lote.",
+                    producto.unidad
+                )));
+            }
             let diferencia = contada - producto.existencia;
             if diferencia == Cantidad::CERO {
                 return Ok(producto);
@@ -454,10 +455,54 @@ pub(crate) fn mover(
     tipo: TipoMovimiento,
     referencia: &str,
 ) -> Resultado<()> {
+    mover_en(conn, producto_id, None, cantidad, tipo, referencia, None)
+}
+
+fn borrar(tx: &Connection, id: i64) -> Resultado<()> {
+    let borrados = tx.execute(
+        "UPDATE productos SET borrado_en = ?2, activo = 0 WHERE id = ?1 AND borrado_en IS NULL",
+        params![id, ahora()],
+    )?;
+    if borrados == 0 {
+        return Err(Error::NoEncontrado("Producto"));
+    }
+    let mut sentencia = tx.prepare(
+        "SELECT DISTINCT pa.venta_id FROM partidas pa JOIN ventas v ON v.id = pa.venta_id
+         WHERE pa.producto_id = ?1 AND v.estado IN ('abierta', 'pausada')",
+    )?;
+    let pendientes: Vec<i64> = sentencia.query_map([id], |f| f.get(0))?.collect::<rusqlite::Result<_>>()?;
+    for venta_id in pendientes {
+        tx.execute("DELETE FROM partidas WHERE venta_id = ?1 AND producto_id = ?2", [venta_id, id])?;
+        crate::ventas::recalcular(tx, venta_id)?;
+    }
+    Ok(())
+}
+
+/// Como [`mover`], y si hay `lote_id` también mueve la existencia de ese lote. Mercancía que regresa a un lote
+/// ya retirado (una devolución) lo vuelve a poner a la vista, para retirarla otra vez.
+/// `costo`: el unitario de ese momento, para lo que se retira por caducidad.
+pub(crate) fn mover_en(
+    conn: &Connection,
+    producto_id: i64,
+    lote_id: Option<i64>,
+    cantidad: Cantidad,
+    tipo: TipoMovimiento,
+    referencia: &str,
+    costo: Option<Dinero>,
+) -> Resultado<()> {
     conn.execute("UPDATE productos SET existencia = existencia + ?2 WHERE id = ?1", params![producto_id, cantidad])?;
+    if let Some(lote_id) = lote_id {
+        conn.execute(
+            "UPDATE lotes SET existencia = existencia + ?2,
+                              retirado_en = CASE WHEN ?2 > 0 THEN NULL ELSE retirado_en END
+             WHERE id = ?1",
+            params![lote_id, cantidad],
+        )?;
+    }
     conn.execute(
-        "INSERT INTO movimientos (producto_id, tipo, cantidad, referencia) VALUES (?1, ?2, ?3, ?4)",
-        params![producto_id, tipo, cantidad, referencia.trim()],
+        "INSERT INTO movimientos (producto_id, tipo, cantidad, referencia, lote_id, costo)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![producto_id, tipo, cantidad, referencia.trim(), lote_id, costo],
     )?;
     Ok(())
 }
@@ -671,6 +716,22 @@ pub(crate) mod tests {
         assert!(bd.borrar_producto(martillo.id).is_err());
         assert_eq!(bd.movimientos(martillo.id, 10).unwrap().len(), 1);
         bd.crear_producto(&datos("MAR", "Martillo nuevo", "120", "70")).unwrap(); // el código quedó libre
+    }
+
+    #[test]
+    fn borrar_varios_es_todo_o_nada() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let martillo = bd.crear_producto(&datos("MAR", "Martillo", "100", "60")).unwrap();
+        let pinza = bd.crear_producto(&datos("PIN", "Pinza", "80", "50")).unwrap();
+        let clavo = bd.crear_producto(&datos("CLA", "Clavo", "1", "0.5")).unwrap();
+
+        // uno ya no existe: no se borra ninguno
+        assert!(bd.borrar_productos(&[martillo.id, 999]).is_err());
+        assert_eq!(bd.buscar_productos("", false, 10).unwrap().len(), 3);
+
+        assert_eq!(bd.borrar_productos(&[martillo.id, pinza.id]).unwrap(), 2);
+        assert_eq!(nombres(&bd.buscar_productos("", false, 10).unwrap()), ["Clavo"]);
+        assert_eq!(bd.producto(clavo.id).unwrap().nombre, "Clavo");
     }
 
     #[test]

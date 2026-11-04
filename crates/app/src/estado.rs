@@ -1,6 +1,6 @@
 //! Lo que la app recuerda entre un clic y otro.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use nucleo::catalogo::Producto;
@@ -11,12 +11,14 @@ use nucleo::{Bd, Cantidad, Error, Resultado};
 
 use crate::configuracion::Configuracion;
 
-/// Un producto esperando a que el cajero diga cuánto pesa o qué precio lleva.
+/// Un producto esperando a que el cajero diga cuánto pesa, de qué lote sale o qué precio lleva.
 pub struct Pendiente {
     pub producto: Producto,
     pub cantidad: Option<Cantidad>,
-    /// Si es para cambiar el precio de una partida que ya está en la venta.
+    /// Si es para cambiar el precio o el lote de una partida que ya está en la venta.
     pub partida: Option<i64>,
+    /// `None` = aún no se sabe; `Some(None)` = sin lote.
+    pub lote: Option<Option<i64>>,
 }
 
 /// Un precio adicional mientras se edita, tal como se escribe.
@@ -51,6 +53,8 @@ pub struct Estado {
 
     // Productos y clientes
     pub busqueda_productos: (String, bool, bool),
+    /// Los palomeados en la lista, para borrarlos de una vez. Siempre de entre los que se ven.
+    pub marcados: BTreeSet<i64>,
     pub editor_precios: Vec<OtroPrecioTexto>,
     pub importacion: Option<PathBuf>,
     pub busqueda_clientes: String,
@@ -78,6 +82,7 @@ impl Estado {
             devolucion: BTreeMap::new(),
             filtro_cotizaciones: String::new(),
             busqueda_productos: Default::default(),
+            marcados: BTreeSet::new(),
             editor_precios: Vec::new(),
             importacion: None,
             busqueda_clientes: String::new(),

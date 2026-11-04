@@ -11,7 +11,8 @@ use nucleo::catalogo::{DatosFamilia, DatosProducto, OtroPrecio};
 use nucleo::clientes::DatosCliente;
 use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
-use nucleo::negocio::Negocio;
+use nucleo::lotes::{DatosLote, Origen};
+use nucleo::negocio::{Giro, Negocio};
 use nucleo::negocios::BASE_DE_DATOS;
 use nucleo::reportes::Filtro;
 use nucleo::texto::normalizar;
@@ -22,8 +23,8 @@ use slint::{ComponentHandle, Model, SharedString, Timer};
 
 use crate::estado::{Estado, OtroPrecioTexto, Pendiente};
 use crate::{
-    Api, App, ClienteUi, CobroUi, EditorProductoUi, ImpresoraUi, NegocioListaUi, NegocioUi, PrecioUi, RespuestaUi,
-    imprimir, respaldos, vista,
+    Api, App, ClienteUi, CobroUi, EditorProductoUi, ImpresoraUi, LoteUi, NegocioListaUi, NegocioUi, PrecioUi,
+    ProductoUi, RespuestaUi, imprimir, respaldos, vista,
 };
 
 type Compartido = Rc<RefCell<Estado>>;
@@ -51,8 +52,8 @@ pub fn conectar(app: &App, estado: Compartido) {
     }
 
     // — Sesión —
-    conectar!(api, app, estado, on_configurar, |app, e, negocio, nombre, pin| {
-        match configurar(&mut e, &negocio, &nombre, &pin) {
+    conectar!(api, app, estado, on_configurar, |app, e, negocio, giro, nombre, pin| {
+        match configurar(&mut e, &negocio, giro_de(giro), &nombre, &pin) {
             Ok(()) => {
                 e.negocio_anterior = None;
                 recordar_nombre(&app, &mut e);
@@ -165,11 +166,7 @@ pub fn conectar(app: &App, estado: Compartido) {
                 let Some(mut pendiente) = e.pendiente.take() else { return };
                 pendiente.cantidad = Some(peso);
                 app.global::<Api>().set_pide_peso(false);
-                if pendiente.producto.precios.is_empty() {
-                    agregar(&app, &mut e, pendiente.producto.id, peso, None);
-                } else {
-                    preguntar_precio(&app, &mut e, pendiente);
-                }
+                continuar(&app, &mut e, pendiente);
             }
             Err(error) => avisar(&app, error.to_string(), true),
         }
@@ -185,8 +182,41 @@ pub fn conectar(app: &App, estado: Compartido) {
             }
             None => {
                 let cantidad = pendiente.cantidad.unwrap_or(Cantidad::UNO);
-                agregar(&app, &mut e, pendiente.producto.id, cantidad, elegido);
+                agregar(&app, &mut e, pendiente.producto.id, cantidad, elegido, pendiente.lote.flatten());
             }
+        }
+    });
+    conectar!(api, app, estado, on_elegir_lote, |app, e, lote_id| {
+        let Some(mut pendiente) = e.pendiente.take() else { return };
+        app.global::<Api>().set_pide_lote(false);
+        let elegido = (lote_id != 0).then_some(i64::from(lote_id));
+        match pendiente.partida {
+            Some(partida) => {
+                let resultado = venta_actual(&e).and_then(|venta| e.bd.elegir_lote(venta, partida, elegido));
+                mostrar_venta(&app, &mut e, resultado);
+            }
+            None => {
+                pendiente.lote = Some(elegido);
+                continuar(&app, &mut e, pendiente);
+            }
+        }
+    });
+    conectar!(api, app, estado, on_cambiar_lote, |app, e, partida| {
+        let resultado = venta_actual(&e).and_then(|id| {
+            let venta = e.bd.venta(id)?;
+            let partida =
+                venta.partidas.iter().find(|p| p.id == i64::from(partida)).ok_or(Error::NoEncontrado("Producto"))?;
+            let producto = e.bd.producto(partida.producto_id)?;
+            let opciones = opciones_lote(&e, &producto)?;
+            Ok((
+                Pendiente { producto, cantidad: Some(partida.cantidad), partida: Some(partida.id), lote: None },
+                opciones,
+            ))
+        });
+        match resultado {
+            Ok((_, opciones)) if opciones.is_empty() => avisar(&app, "Este producto no tiene lotes.", true),
+            Ok((pendiente, opciones)) => preguntar_lote(&app, &mut e, pendiente, opciones),
+            Err(error) => avisar(&app, error.to_string(), true),
         }
     });
     conectar!(api, app, estado, on_cancelar_pendiente, |app, e| {
@@ -194,6 +224,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         let api = app.global::<Api>();
         api.set_pide_precio(false);
         api.set_pide_peso(false);
+        api.set_pide_lote(false);
     });
     conectar!(api, app, estado, on_cambiar_cantidad, |app, e, partida, texto| {
         let resultado = leer::<Cantidad>(&texto)
@@ -209,7 +240,7 @@ pub fn conectar(app: &App, estado: Compartido) {
             // A granel se suma de 100 en 100 gramos.
             let paso = if partida.unidad == "kg" { Cantidad::crudo(100) } else { Cantidad::UNO };
             let cantidad = if signo < 0 { -paso } else { paso };
-            e.bd.agregar(id, partida.producto_id, cantidad, None)
+            e.bd.agregar_de_lote(id, partida.producto_id, partida.lote_id, cantidad, None)
         });
         mostrar_venta(&app, &mut e, resultado);
     });
@@ -233,7 +264,7 @@ pub fn conectar(app: &App, estado: Compartido) {
                     .and_then(|v| e.bd.venta(v))
                     .ok()
                     .and_then(|v| v.partidas.iter().find(|p| p.id == partida).map(|p| p.cantidad));
-                preguntar_precio(&app, &mut e, Pendiente { producto, cantidad, partida: Some(partida) })
+                preguntar_precio(&app, &mut e, Pendiente { producto, cantidad, partida: Some(partida), lote: None })
             }
             Err(error) => avisar(&app, error.to_string(), true),
         }
@@ -493,7 +524,7 @@ pub fn conectar(app: &App, estado: Compartido) {
     // — Productos —
     conectar!(api, app, estado, on_buscar_productos, |app, e, texto, inactivos, surtir| {
         e.busqueda_productos = (texto.into(), inactivos, surtir);
-        refrescar_productos(&app, &e);
+        refrescar_productos(&app, &mut e);
     });
     conectar!(api, app, estado, on_editar_producto, |app, e, id| abrir_editor(&app, &mut e, id.into()));
     conectar!(api, app, estado, on_cerrar_editor, |app, e| {
@@ -509,13 +540,29 @@ pub fn conectar(app: &App, estado: Compartido) {
                 },
             );
         let mensaje = texto_de(&app, resultado.map(|p| format!("{} guardado.", p.nombre)));
-        refrescar_productos(&app, &e);
+        refrescar_productos(&app, &mut e);
         mensaje
     });
     conectar!(api, app, estado, on_borrar_producto, |app, e, id| {
         let resultado = e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| e.bd.borrar_producto(id.into()));
         let mensaje = texto_de(&app, resultado.map(|()| "Producto borrado."));
-        refrescar_productos(&app, &e);
+        refrescar_productos(&app, &mut e);
+        mensaje
+    });
+    conectar!(api, app, estado, on_marcar_producto, |app, e, id, si| marcar(&app, &mut e, Some(id.into()), si));
+    conectar!(api, app, estado, on_marcar_todos, |app, e, si| marcar(&app, &mut e, None, si));
+    conectar!(api, app, estado, on_borrar_marcados, |app, e| {
+        let ids: Vec<i64> = e.marcados.iter().copied().collect();
+        let resultado = e.permiso(Permiso::ManejarProductos).map(|_| ()).and_then(|()| e.bd.borrar_productos(&ids));
+        if resultado.is_ok() {
+            e.marcados.clear();
+        }
+        let mensaje = texto_de(
+            &app,
+            resultado
+                .map(|n| if n == 1 { "1 producto borrado.".to_string() } else { format!("{n} productos borrados.") }),
+        );
+        refrescar_productos(&app, &mut e);
         mensaje
     });
     conectar!(api, app, estado, on_agregar_otro_precio, |app, e| {
@@ -581,7 +628,7 @@ pub fn conectar(app: &App, estado: Compartido) {
         let ok = resultado.is_ok();
         let mensaje = texto_de(&app, resultado.map(|_| "Entrada registrada."));
         if ok {
-            actualizar_existencia_editor(&app, &e, id.into());
+            actualizar_existencia_editor(&app, &mut e, id.into());
         }
         mensaje
     });
@@ -594,10 +641,60 @@ pub fn conectar(app: &App, estado: Compartido) {
         let ok = resultado.is_ok();
         let mensaje = texto_de(&app, resultado.map(|_| "Existencia ajustada."));
         if ok {
-            actualizar_existencia_editor(&app, &e, id.into());
+            actualizar_existencia_editor(&app, &mut e, id.into());
         }
         mensaje
     });
+    conectar!(api, app, estado, on_agregar_lote, |app, e, nuevo| {
+        let resultado = e.permiso(Permiso::ManejarInventario).map(|_| ()).and_then(|()| {
+            let datos = datos_lote(&nuevo.numero, &nuevo.fabricacion, &nuevo.caducidad)?;
+            let cantidad = leer::<Cantidad>(&nuevo.cantidad)?;
+            let origen = if nuevo.ya_estaba { Origen::Existencia } else { Origen::Entrada };
+            e.bd.agregar_lote(nuevo.producto.into(), &datos, cantidad, origen, &nuevo.referencia)
+        });
+        let ok = resultado.is_ok();
+        let mensaje = texto_de(&app, resultado.map(|l| format!("Lote {} guardado.", l.numero)));
+        if ok {
+            actualizar_existencia_editor(&app, &mut e, nuevo.producto.into());
+        }
+        mensaje
+    });
+    conectar!(api, app, estado, on_editar_lote, |app, e, id, numero, fabricacion, caducidad| {
+        let resultado = e
+            .permiso(Permiso::ManejarInventario)
+            .map(|_| ())
+            .and_then(|()| e.bd.editar_lote(id.into(), &datos_lote(&numero, &fabricacion, &caducidad)?));
+        despues_de_lote(&app, &mut e, resultado.map(|l| (l.producto_id, format!("Lote {} guardado.", l.numero))))
+    });
+    conectar!(api, app, estado, on_contar_lote, |app, e, id, contada| {
+        let resultado = e
+            .permiso(Permiso::ManejarInventario)
+            .map(|_| ())
+            .and_then(|()| leer::<Cantidad>(&contada))
+            .and_then(|contada| e.bd.contar_lote(id.into(), contada));
+        despues_de_lote(
+            &app,
+            &mut e,
+            resultado.map(|l| (l.producto_id, format!("Lote {}: existencia ajustada.", l.numero))),
+        )
+    });
+    conectar!(api, app, estado, on_retirar_lote, |app, e, id| {
+        let resultado = e.permiso(Permiso::ManejarInventario).map(|_| ()).and_then(|()| {
+            let antes = e.bd.lote(id.into())?;
+            e.bd.retirar_lote(id.into())?;
+            Ok((
+                antes.producto_id,
+                format!(
+                    "Lote {} retirado: {} fuera del inventario ({} de pérdida).",
+                    antes.numero,
+                    vista::lote(&antes).existencia,
+                    antes.perdida().pesos()
+                ),
+            ))
+        });
+        despues_de_lote(&app, &mut e, resultado)
+    });
+    conectar!(api, app, estado, on_cargar_caducidades, |app, e| refrescar_caducidades(&app, &e));
     conectar!(api, app, estado, on_elegir_importacion, |app, e| {
         if let Err(error) = e.permiso(Permiso::ManejarProductos) {
             return avisar(&app, error.to_string(), true);
@@ -632,7 +729,7 @@ pub fn conectar(app: &App, estado: Compartido) {
             resultado.map(|v| format!("Listo: {} productos nuevos y {} actualizados.", v.crear, v.actualizar)),
         );
         app.global::<Api>().set_importando(false);
-        refrescar_productos(&app, &e);
+        refrescar_productos(&app, &mut e);
     });
     conectar!(api, app, estado, on_cerrar_importacion, |app, e| {
         e.importacion = None;
@@ -644,10 +741,11 @@ pub fn conectar(app: &App, estado: Compartido) {
         }
         let nombre = format!("productos-{}.xlsx", vista::hoy());
         if let Some(ruta) = guardar_como("Excel", "xlsx", &nombre) {
-            let resultado =
-                e.bd.buscar_productos("", false, 100_000)
-                    .and_then(|productos| exportacion::productos_a_excel(&productos))
-                    .and_then(|bytes| escribir(&ruta, bytes));
+            let lotes = if es_farmacia(&e) { e.bd.todos_los_lotes() } else { Ok(Vec::new()) };
+            let resultado = lotes
+                .and_then(|lotes| Ok((e.bd.buscar_productos("", false, 100_000)?, lotes)))
+                .and_then(|(productos, lotes)| exportacion::productos_a_excel(&productos, &lotes))
+                .and_then(|bytes| escribir(&ruta, bytes));
             texto_de(&app, resultado.map(|()| "Catálogo exportado."));
         }
     });
@@ -706,6 +804,7 @@ pub fn conectar(app: &App, estado: Compartido) {
                 rfc: negocio.rfc.into(),
                 tasa_iva: leer::<Porcentaje>(&negocio.iva)?,
                 pie_ticket: negocio.pie.into(),
+                giro: giro_de(negocio.giro),
             };
             e.bd.guardar_negocio(&datos)
         });
@@ -800,12 +899,12 @@ pub fn conectar(app: &App, estado: Compartido) {
 
 // — Sesión —
 
-fn configurar(e: &mut Estado, negocio: &str, nombre: &str, pin: &str) -> Resultado<()> {
+fn configurar(e: &mut Estado, negocio: &str, giro: Giro, nombre: &str, pin: &str) -> Resultado<()> {
     if e.bd.hay_usuarios()? {
         return Err(Error::invalido("La aplicación ya está configurada."));
     }
     let actual = e.bd.negocio()?;
-    e.bd.guardar_negocio(&Negocio { nombre: negocio.into(), ..actual })?;
+    e.bd.guardar_negocio(&Negocio { nombre: negocio.into(), giro, ..actual })?;
     let admin = e.bd.crear_usuario(
         &DatosUsuario { nombre: nombre.into(), rol: Rol::Administrador, activo: true, permisos: Permisos::default() },
         pin,
@@ -873,6 +972,24 @@ fn refrescar_inicio(app: &App, e: &Estado) {
     api.set_usuarios_login(vista::modelo(usuarios.iter().filter(|u| u.activo).map(vista::usuario)));
     api.set_negocio_nombre(e.bd.negocio().map(|n| n.nombre).unwrap_or_default().into());
     api.set_fecha_larga(fecha_larga(vista::hoy()).into());
+    api.set_giros(vista::modelo(Giro::TODOS.iter().map(|g| SharedString::from(g.etiqueta()))));
+    api.set_es_farmacia(es_farmacia(e));
+    refrescar_caducados(app, e);
+}
+
+/// El tipo de negocio que está en la posición `indice` de la lista de la pantalla.
+fn giro_de(indice: i32) -> Giro {
+    usize::try_from(indice).ok().and_then(|i| Giro::TODOS.get(i)).copied().unwrap_or(Giro::Abarrotes)
+}
+
+fn es_farmacia(e: &Estado) -> bool {
+    e.bd.negocio().is_ok_and(|n| n.giro == Giro::Farmacia)
+}
+
+/// Cuántos lotes caducados esperan a que alguien los retire (el aviso del menú).
+fn refrescar_caducados(app: &App, e: &Estado) {
+    let caducados = if es_farmacia(e) { e.bd.lotes_caducados().unwrap_or_default() } else { 0 };
+    app.global::<Api>().set_caducados(caducados as i32);
 }
 
 fn entrar_como(app: &App, e: &mut Estado) {
@@ -926,6 +1043,7 @@ fn refrescar_venta(app: &App, e: &mut Estado) {
         Err(error) => avisar(app, error.to_string(), true),
     }
     app.global::<Api>().set_caja_abierta(e.bd.caja_abierta().map(|c| c.is_some()).unwrap_or(true));
+    refrescar_caducados(app, e); // un lote puede caducar con la app abierta
     limpiar_resultados(app, e);
 }
 
@@ -942,20 +1060,74 @@ fn mostrar_venta(app: &App, e: &mut Estado, resultado: Resultado<nucleo::ventas:
     limpiar_resultados(app, e);
 }
 
-/// Se eligió un producto: si es a granel y no se dijo el peso, se pregunta; si tiene varios precios,
-/// se pregunta cuál; si no, se agrega directo.
+/// Se eligió un producto: se pregunta lo que haga falta (peso, lote, precio) y se agrega.
 fn elegir_producto(app: &App, e: &mut Estado, producto: nucleo::catalogo::Producto, cantidad: Option<Cantidad>) {
     limpiar_resultados(app, e);
-    if producto.granel && cantidad.is_none() {
+    continuar(app, e, Pendiente { producto, cantidad, partida: None, lote: None });
+}
+
+/// Lo que falta saber del producto elegido, en orden: el peso si es a granel y no se dijo; de qué lote sale (en una
+/// farmacia, si tiene más de una opción); qué precio, si tiene varios. Con todo, se agrega.
+fn continuar(app: &App, e: &mut Estado, mut pendiente: Pendiente) {
+    if pendiente.producto.granel && pendiente.cantidad.is_none() {
         let api = app.global::<Api>();
-        api.set_producto_pendiente(vista::producto(&producto));
+        api.set_producto_pendiente(vista::producto(&pendiente.producto));
         api.set_pide_peso(true);
-        e.pendiente = Some(Pendiente { producto, cantidad, partida: None });
-    } else if !producto.precios.is_empty() {
-        preguntar_precio(app, e, Pendiente { producto, cantidad, partida: None });
-    } else {
-        agregar(app, e, producto.id, cantidad.unwrap_or(Cantidad::UNO), None);
+        e.pendiente = Some(pendiente);
+        return;
     }
+    if pendiente.lote.is_none() {
+        match opciones_lote(e, &pendiente.producto) {
+            Err(error) => return avisar(app, error.to_string(), true),
+            Ok(opciones) => match opciones.as_slice() {
+                [] => pendiente.lote = Some(None),
+                [unica] => pendiente.lote = Some((unica.id != 0).then_some(i64::from(unica.id))),
+                _ => return preguntar_lote(app, e, pendiente, opciones),
+            },
+        }
+    }
+    if !pendiente.producto.precios.is_empty() {
+        return preguntar_precio(app, e, pendiente);
+    }
+    let cantidad = pendiente.cantidad.unwrap_or(Cantidad::UNO);
+    agregar(app, e, pendiente.producto.id, cantidad, None, pendiente.lote.flatten());
+}
+
+/// De qué lotes se puede vender el producto: los que tienen existencia y no han caducado (el que caduca primero
+/// al principio), y «sin lote» si hay existencia fuera de los lotes. Vacío si no maneja lotes.
+fn opciones_lote(e: &Estado, producto: &nucleo::catalogo::Producto) -> Resultado<Vec<LoteUi>> {
+    if !es_farmacia(e) {
+        return Ok(Vec::new());
+    }
+    let lotes = e.bd.lotes(producto.id)?;
+    if lotes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hoy = vista::hoy();
+    let mut opciones: Vec<LoteUi> = lotes.iter().filter(|l| !l.caducado(hoy)).map(vista::lote).collect();
+    let libre = e.bd.existencia_sin_lote(producto.id)?;
+    if libre.es_positivo() {
+        opciones.push(LoteUi {
+            numero: "Sin lote".into(),
+            existencia: format!("{libre} {}", producto.unidad).into(),
+            ..Default::default()
+        });
+    }
+    if opciones.is_empty() {
+        return Err(Error::invalido(format!(
+            "Todo lo que hay de {} está caducado: retíralo en Productos → Caducidades.",
+            producto.nombre
+        )));
+    }
+    Ok(opciones)
+}
+
+fn preguntar_lote(app: &App, e: &mut Estado, pendiente: Pendiente, opciones: Vec<LoteUi>) {
+    let api = app.global::<Api>();
+    api.set_producto_pendiente(vista::producto(&pendiente.producto));
+    api.set_opciones_lote(vista::modelo(opciones));
+    api.set_pide_lote(true);
+    e.pendiente = Some(pendiente);
 }
 
 fn preguntar_precio(app: &App, e: &mut Estado, pendiente: Pendiente) {
@@ -987,8 +1159,8 @@ fn preguntar_precio(app: &App, e: &mut Estado, pendiente: Pendiente) {
     e.pendiente = Some(pendiente);
 }
 
-fn agregar(app: &App, e: &mut Estado, producto: i64, cantidad: Cantidad, precio: Option<i64>) {
-    let resultado = venta_actual(e).and_then(|venta| e.bd.agregar(venta, producto, cantidad, precio));
+fn agregar(app: &App, e: &mut Estado, producto: i64, cantidad: Cantidad, precio: Option<i64>, lote: Option<i64>) {
+    let resultado = venta_actual(e).and_then(|venta| e.bd.agregar_de_lote(venta, producto, lote, cantidad, precio));
     mostrar_venta(app, e, resultado);
 }
 
@@ -1153,10 +1325,38 @@ fn refrescar_caja(app: &App, e: &Estado) {
 
 // — Productos —
 
-fn refrescar_productos(app: &App, e: &Estado) {
+fn refrescar_productos(app: &App, e: &mut Estado) {
     let (texto, inactivos, surtir) = &e.busqueda_productos;
     let productos = if *surtir { e.bd.productos_en_alerta() } else { e.bd.buscar_productos(texto, !inactivos, 500) };
-    app.global::<Api>().set_productos(vista::modelo(productos.unwrap_or_default().iter().map(vista::producto)));
+    let productos = productos.unwrap_or_default();
+    // Solo se borra lo que se ve: lo palomeado que ya no está en la lista se desmarca.
+    e.marcados.retain(|id| productos.iter().any(|p| p.id == *id));
+    let marcados = &e.marcados;
+    let api = app.global::<Api>();
+    api.set_productos(vista::modelo(
+        productos.iter().map(|p| ProductoUi { marcado: marcados.contains(&p.id), ..vista::producto(p) }),
+    ));
+    api.set_marcados(marcados.len() as i32);
+}
+
+/// Palomea o desmarca en la lista que ya se ve, sin volver a buscar (así no se mueve la lista).
+fn marcar(app: &App, e: &mut Estado, cual: Option<i64>, si: bool) {
+    let api = app.global::<Api>();
+    let productos = api.get_productos();
+    for i in 0..productos.row_count() {
+        let Some(mut p) = productos.row_data(i) else { continue };
+        let id = i64::from(p.id);
+        if cual.is_none_or(|cual| cual == id) && p.marcado != si {
+            p.marcado = si;
+            productos.set_row_data(i, p);
+            if si {
+                e.marcados.insert(id);
+            } else {
+                e.marcados.remove(&id);
+            }
+        }
+    }
+    api.set_marcados(e.marcados.len() as i32);
 }
 
 fn refrescar_familias(app: &App, e: &Estado) {
@@ -1210,12 +1410,16 @@ fn abrir_editor(app: &App, e: &mut Estado, id: i64) {
             alerta: texto_de(p.alerta_stock).into(),
             activo: p.activo,
             existencia: p.existencia.to_string().into(),
+            sin_lote: e.bd.existencia_sin_lote(p.id).unwrap_or_default().to_string().into(),
             precios: vista::modelo([]),
         }
     };
+    let lotes = if id == 0 || !es_farmacia(e) { Vec::new() } else { e.bd.lotes(id).unwrap_or_default() };
     let movimientos = if id == 0 { Vec::new() } else { e.bd.movimientos(id, 30).unwrap_or_default() };
     let api = app.global::<Api>();
     api.set_movimientos(vista::modelo(movimientos.iter().map(vista::movimiento)));
+    api.set_lotes(vista::modelo(lotes.iter().map(vista::lote)));
+    api.set_lote_abierto(-1);
     api.set_editor(editor);
     mostrar_otros_precios(app, e);
     api.set_editando(true);
@@ -1233,16 +1437,51 @@ fn mostrar_otros_precios(app: &App, e: &Estado) {
     api.set_editor(editor);
 }
 
-fn actualizar_existencia_editor(app: &App, e: &Estado, id: i64) {
+fn actualizar_existencia_editor(app: &App, e: &mut Estado, id: i64) {
     let api = app.global::<Api>();
     if let Ok(producto) = e.bd.producto(id) {
         let mut editor = api.get_editor();
         editor.existencia = producto.existencia.to_string().into();
+        editor.sin_lote = e.bd.existencia_sin_lote(id).unwrap_or_default().to_string().into();
         api.set_editor(editor);
     }
     let movimientos = e.bd.movimientos(id, 30).unwrap_or_default();
     api.set_movimientos(vista::modelo(movimientos.iter().map(vista::movimiento)));
+    if es_farmacia(e) {
+        api.set_lotes(vista::modelo(e.bd.lotes(id).unwrap_or_default().iter().map(vista::lote)));
+    }
     refrescar_productos(app, e);
+    refrescar_caducados(app, e);
+}
+
+/// Tras editar, contar o retirar un lote: avisa, y pone al día el producto abierto y la lista de caducidades.
+fn despues_de_lote(app: &App, e: &mut Estado, resultado: Resultado<(i64, String)>) -> SharedString {
+    let producto = resultado.as_ref().ok().map(|(id, _)| *id);
+    let mensaje = texto_de(app, resultado.map(|(_, mensaje)| mensaje));
+    if let Some(id) = producto {
+        let api = app.global::<Api>();
+        if api.get_editando() && i64::from(api.get_editor().id) == id {
+            actualizar_existencia_editor(app, e, id);
+        }
+        refrescar_caducidades(app, e);
+    }
+    mensaje
+}
+
+fn refrescar_caducidades(app: &App, e: &Estado) {
+    let avisos = if es_farmacia(e) { e.bd.avisos_de_caducidad().unwrap_or_default() } else { Vec::new() };
+    app.global::<Api>().set_avisos_caducidad(vista::modelo(avisos.iter().map(vista::lote)));
+    refrescar_caducados(app, e);
+}
+
+/// Número, fechas: la caducidad es obligatoria; la fabricación, no.
+fn datos_lote(numero: &str, fabricacion: &str, caducidad: &str) -> Resultado<DatosLote> {
+    Ok(DatosLote {
+        numero: numero.trim().into(),
+        fabricacion: nucleo::lotes::leer_fecha(fabricacion)?,
+        caducidad: nucleo::lotes::leer_fecha(caducidad)?
+            .ok_or_else(|| Error::invalido("Falta la fecha de caducidad (dd/mm/aaaa)."))?,
+    })
 }
 
 fn datos_producto(e: &Estado, editor: &EditorProductoUi) -> Resultado<DatosProducto> {
@@ -1327,6 +1566,7 @@ fn refrescar_ajustes(app: &App, e: &Estado) {
             rfc: n.rfc.into(),
             iva: n.tasa_iva.to_string().into(),
             pie: n.pie_ticket.into(),
+            giro: Giro::TODOS.iter().position(|&g| g == n.giro).unwrap_or_default() as i32,
         });
     }
     let usuarios = e.bd.usuarios().unwrap_or_default();

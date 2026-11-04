@@ -1,6 +1,6 @@
 // Primer arranque y entrada con PIN.
 
-import { Button, LineEdit } from "std-widgets.slint";
+import { Button, LineEdit, ComboBox } from "std-widgets.slint";
 import { Api, UsuarioUi } from "../api.slint";
 import { Tema, Panel, Titulo, Nota, Campo, PinPad, Dialogo } from "../comunes.slint";
 
@@ -41,6 +41,7 @@ component ElegirNegocio inherits Dialogo {
 export component Configurar inherits Rectangle {
     background: Tema.fondo;
     property <string> error;
+    property <int> giro: 0;
     Panel {
         width: 420px;
         height: formulario.preferred-height;
@@ -55,6 +56,12 @@ export component Configurar inherits Rectangle {
                 wrap: word-wrap;
             }
             negocio := Campo { etiqueta: "Nombre del negocio"; placeholder: "Ferretería La Tuerca"; }
+            VerticalLayout {
+                spacing: 3px;
+                Text { text: "Tipo de negocio"; font-size: 12px; color: Tema.texto-2; }
+                ComboBox { model: Api.giros; current-index <=> giro; }
+                if giro == 2: Nota { text: "Maneja lotes con fecha de caducidad."; }
+            }
             nombre := Campo { etiqueta: "Tu nombre (administrador)"; }
             HorizontalLayout {
                 spacing: 10px;
@@ -75,7 +82,7 @@ export component Configurar inherits Rectangle {
                         if pin.text != repetido.text {
                             error = "Los PIN no coinciden.";
                         } else {
-                            error = Api.configurar(negocio.text, nombre.text, pin.text);
+                            error = Api.configurar(negocio.text, giro, nombre.text, pin.text);
                         }
                     }
                 }

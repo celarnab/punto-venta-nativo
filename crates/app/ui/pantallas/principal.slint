@@ -75,6 +75,32 @@ export component Principal inherits Rectangle {
                 Opcion { clave: "clientes"; text: "Clientes"; }
                 if Api.puede-reportes: Opcion { clave: "reportes"; text: Api.reporte-propio ? "Mis reportes" : "Reportes"; }
                 if Api.es-admin: Opcion { clave: "ajustes"; text: "Ajustes"; }
+                // Farmacias: lotes caducados que esperan a que alguien los retire.
+                if Api.es-farmacia && Api.caducados > 0: Rectangle {
+                    height: 44px;
+                    Rectangle {
+                        x: 10px;
+                        y: 8px;
+                        width: parent.width - 20px;
+                        height: 32px;
+                        background: avisar.has-hover ? #b42318 : #8f1d14;
+                        border-radius: 4px;
+                        Text {
+                            text: Api.caducados == 1 ? "⚠ 1 lote caducado" : "⚠ " + Api.caducados + " lotes caducados";
+                            color: white;
+                            font-size: 12px;
+                            font-weight: 700;
+                        }
+                        avisar := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                Api.viendo-caducidades = true;
+                                if Api.pantalla == "productos" { Api.cargar-caducidades(); }
+                                Api.pantalla = "productos";
+                            }
+                        }
+                    }
+                }
                 Rectangle { }
                 Rectangle {
                     height: 1px;

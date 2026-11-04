@@ -6,6 +6,7 @@ use nucleo::catalogo::{Familia, Movimiento, Producto};
 use nucleo::clientes::Cliente;
 use nucleo::devoluciones::Devolucion;
 use nucleo::importacion::{Accion, Vista};
+use nucleo::lotes::Lote;
 use nucleo::reportes::{Fila, Reporte};
 use nucleo::usuarios::Usuario;
 use nucleo::ventas::{Estado, Partida, Venta};
@@ -13,8 +14,8 @@ use nucleo::{Cantidad, Dinero};
 use slint::{ModelRc, SharedString, VecModel};
 
 use crate::{
-    ApartadoUi, ClienteUi, CorteUi, FamiliaUi, FilaUi, ImportacionUi, MovimientoUi, PartidaUi, PermisosUi, ProductoUi,
-    ReporteUi, UsuarioUi, VentaUi,
+    ApartadoUi, ClienteUi, CorteUi, FamiliaUi, FilaUi, ImportacionUi, LoteUi, MovimientoUi, PartidaUi, PermisosUi,
+    ProductoUi, ReporteUi, UsuarioUi, VentaUi,
 };
 
 pub fn modelo<T: Clone + 'static>(elementos: impl IntoIterator<Item = T>) -> ModelRc<T> {
@@ -83,6 +84,7 @@ pub fn producto(p: &Producto) -> ProductoUi {
         activo: p.activo,
         alerta: p.en_alerta(),
         otros_precios: p.precios.len() as i32,
+        marcado: false,
     }
 }
 
@@ -106,6 +108,33 @@ pub fn partida(p: &Partida, a_devolver: Option<Cantidad>) -> PartidaUi {
         sugerencia: texto(
             p.sugerencia.as_ref().map(|s| format!("{} {}", s.nombre, s.precio.pesos())).unwrap_or_default(),
         ),
+        lote: texto(match (&p.lote, p.caducidad) {
+            (Some(lote), Some(caducidad)) => format!("Lote {lote} · cad. {}", caducidad.format("%d/%m/%Y")),
+            (Some(lote), None) => format!("Lote {lote}"),
+            _ => String::new(),
+        }),
+        pide_lote: p.pide_lote,
+    }
+}
+
+pub fn fecha(dia: NaiveDate) -> String {
+    dia.format("%d/%m/%Y").to_string()
+}
+
+pub fn lote(l: &Lote) -> LoteUi {
+    let estado = l.estado(hoy());
+    LoteUi {
+        id: l.id as i32,
+        producto_id: l.producto_id as i32,
+        codigo: texto(&l.codigo),
+        producto: texto(&l.producto),
+        numero: texto(&l.numero),
+        fabricacion: texto(l.fabricacion.map(fecha).unwrap_or_default()),
+        caducidad: texto(fecha(l.caducidad)),
+        existencia: texto(format!("{} {}", l.existencia, l.unidad)),
+        estado: texto(estado.etiqueta()),
+        clave: texto(estado.clave()),
+        perdida: pesos(l.perdida()),
     }
 }
 
@@ -143,6 +172,7 @@ pub fn venta(v: &Venta, devoluciones: &[Devolucion], a_devolver: impl Fn(i64) ->
             etiqueta: texto(format!("{} · {} · {}", fecha_corta(d.creada), d.metodo.etiqueta(), d.motivo)),
             valor: pesos(d.reembolso),
             proporcion: 0.0,
+            negativo: false,
         })),
     }
 }
@@ -181,6 +211,7 @@ fn filas(montos: impl IntoIterator<Item = (String, Dinero)>) -> ModelRc<FilaUi> 
         etiqueta: texto(etiqueta),
         valor: pesos(monto),
         proporcion: 0.0,
+        negativo: false,
     }))
 }
 
@@ -258,17 +289,21 @@ pub fn reporte(r: &Reporte) -> ReporteUi {
         // Vacíos si al usuario no le toca ver costos; la pantalla esconde la cifra.
         utilidad: if r.con_costos { pesos(rs.utilidad) } else { SharedString::new() },
         margen: texto(rs.margen.map(|m| format!("{m:.1} % de margen")).unwrap_or_default()),
+        caducado: if r.con_costos && rs.caducado != Dinero::CERO { pesos(rs.caducado) } else { SharedString::new() },
+        utilidad_negativa: r.con_costos && rs.utilidad < Dinero::CERO,
         apartados: modelo(r.apartados.iter().map(|a| ApartadoUi { titulo: texto(a.titulo), filas: barras(&a.filas) })),
     }
 }
 
-/// Cada fila con su proporción respecto a la mayor, para dibujar la barra.
+/// Cada fila con su proporción respecto a la mayor, para dibujar la barra. Las pérdidas (negativas) se dibujan
+/// por su tamaño, en otro color.
 fn barras(filas: &[Fila]) -> ModelRc<FilaUi> {
-    let maximo = filas.iter().map(|f| f.monto.como_f64()).fold(0.0, f64::max);
+    let maximo = filas.iter().map(|f| f.monto.como_f64().abs()).fold(0.0, f64::max);
     modelo(filas.iter().map(|f| FilaUi {
         id: 0,
         etiqueta: texto(&f.etiqueta),
         valor: pesos(f.monto),
-        proporcion: if maximo > 0.0 { (f.monto.como_f64() / maximo) as f32 } else { 0.0 },
+        proporcion: if maximo > 0.0 { (f.monto.como_f64().abs() / maximo) as f32 } else { 0.0 },
+        negativo: f.monto < Dinero::CERO,
     }))
 }

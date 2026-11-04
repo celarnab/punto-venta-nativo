@@ -10,11 +10,13 @@ use nucleo::catalogo::{DatosFamilia, DatosProducto, OtroPrecio};
 use nucleo::clientes::DatosCliente;
 use nucleo::cobro::{Cobro, Metodo};
 use nucleo::devoluciones::ADevolver;
+use nucleo::lotes::{DatosLote, Origen};
+use nucleo::negocio::Giro;
 use nucleo::usuarios::{DatosUsuario, Permisos, Rol};
 use nucleo::{Bd, Cantidad, Dinero};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{ComponentHandle, Rgb8Pixel};
+use slint::{ComponentHandle, Model, Rgb8Pixel};
 
 use crate::estado::Estado;
 use crate::{Api, App, CobroUi, controlador};
@@ -47,7 +49,8 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let app = App::new()?;
     ventana.set_size(slint::PhysicalSize::new(ANCHO, ALTO));
     app.show()?;
-    controlador::conectar(&app, Rc::new(RefCell::new(estado)));
+    let compartido = Rc::new(RefCell::new(estado));
+    controlador::conectar(&app, compartido.clone());
     let api = app.global::<Api>();
     let foto = |nombre: &str| guardar(&ventana, &carpeta.join(format!("{nombre}.png")));
 
@@ -107,6 +110,14 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
                 foto("10b-corte")?;
             }
             "productos" => {
+                // Borrar varios: dos palomeados y la confirmación (sin borrarlos, que siguen las demás fotos).
+                api.invoke_marcar_producto(ids.tornillo as i32, true);
+                api.invoke_marcar_producto(ids.martillo as i32, true);
+                foto("11b-productos-marcados")?;
+                clic(&app, 1278.0, 71.0); // «Borrar seleccionados»
+                foto("11c-borrar-marcados")?;
+                escribir(&app, &char::from(slint::platform::Key::Escape).to_string());
+                api.invoke_marcar_todos(false);
                 api.invoke_editar_producto(ids.tornillo as i32);
                 foto("12-editor")?;
                 api.invoke_cerrar_editor();
@@ -125,6 +136,39 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     api.invoke_editar_producto(ids.tornillo as i32);
     foto("21-cajero-existencias")?;
     api.invoke_cerrar_editor();
+
+    // Una farmacia: lotes con caducidad al vender, en el producto, en «Caducidades» y en los reportes.
+    let (farmacia, ids_farmacia) = ejemplo_farmacia()?;
+    api.invoke_salir();
+    compartido.borrow_mut().bd = farmacia;
+    api.invoke_salir(); // vuelve a leer el negocio: ya es farmacia
+    api.invoke_entrar(ids_farmacia.admin as i32, "1234".into());
+    api.invoke_confirmar_busqueda("PAR-500".into());
+    foto("22-farmacia-lote")?;
+    let primero = api.get_opciones_lote().row_data(0).map_or(0, |o| o.id);
+    api.invoke_elegir_lote(primero);
+    api.invoke_confirmar_busqueda("5*AMX-500".into());
+    let sin_lote = api.get_opciones_lote().iter().find(|o| o.id == 0).map_or(0, |o| o.id);
+    api.invoke_elegir_lote(sin_lote); // solo hay 3 sin lote: la partida pide elegir lote
+    foto("23-farmacia-venta")?;
+    api.set_pantalla("productos".into());
+    api.invoke_editar_producto(ids_farmacia.paracetamol as i32);
+    foto("24-farmacia-editor")?;
+    clic(&app, 1093.0, 363.0); // «+ Agregar lote»
+    foto("24b-farmacia-agregar-lote")?;
+    api.set_lote_abierto(0);
+    foto("25-farmacia-editar-lote")?;
+    api.set_lote_abierto(-1);
+    api.invoke_cerrar_editor();
+    api.set_pantalla("venta".into());
+    api.set_viendo_caducidades(true);
+    api.set_pantalla("productos".into());
+    api.invoke_cargar_caducidades(); // la pantalla ya existía: su `init` no vuelve a correr
+    foto("26-farmacia-caducidades")?;
+    api.set_pantalla("reportes".into());
+    foto("27-farmacia-reportes")?;
+    api.set_pantalla("ajustes".into());
+    foto("28-farmacia-ajustes")?;
 
     // Varios negocios: la lista desde la entrada y la configuración de uno nuevo (al final, porque cambiar de
     // negocio cierra la base de ejemplo).
@@ -175,6 +219,7 @@ struct Ids {
     vianet: i64,
     jorge: i64,
     tornillo: i64,
+    martillo: i64,
     venta_con_devolucion: i64,
 }
 
@@ -282,5 +327,87 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     bd.agregar(pausada, tornillo.id, c("40"), None)?;
     bd.pausar(pausada, "Señor de la camioneta roja")?;
 
-    Ok((bd, Ids { vianet: vianet.id, jorge: jorge.id, tornillo: tornillo.id, venta_con_devolucion: con_devolucion.id }))
+    Ok((
+        bd,
+        Ids {
+            vianet: vianet.id,
+            jorge: jorge.id,
+            tornillo: tornillo.id,
+            martillo: martillo.id,
+            venta_con_devolucion: con_devolucion.id,
+        },
+    ))
+}
+
+struct IdsFarmacia {
+    admin: i64,
+    paracetamol: i64,
+}
+
+/// Una farmacia con medicinas en varios lotes: uno caducado, otro por caducar y otros vigentes; existencia sin lote,
+/// algunas ventas y un lote ya retirado (la pérdida que sale en los reportes).
+fn ejemplo_farmacia() -> nucleo::Resultado<(Bd, IdsFarmacia)> {
+    use chrono::{Days, Local};
+    let d = |t: &str| t.parse::<Dinero>().expect("monto de ejemplo");
+    let c = |t: &str| t.parse::<Cantidad>().expect("cantidad de ejemplo");
+    let hoy = Local::now().date_naive();
+    let en = |dias: i64| if dias >= 0 { hoy + Days::new(dias as u64) } else { hoy - Days::new((-dias) as u64) };
+    let lote = |numero: &str, dias: i64| DatosLote {
+        numero: numero.into(),
+        fabricacion: Some(en(dias - 720)),
+        caducidad: en(dias),
+    };
+
+    let mut bd = Bd::en_memoria()?;
+    let mut negocio = bd.negocio()?;
+    negocio.nombre = "Farmacia Vida Sana".into();
+    negocio.giro = Giro::Farmacia;
+    bd.guardar_negocio(&negocio)?;
+    let admin = bd.crear_usuario(
+        &DatosUsuario { nombre: "Vianet".into(), rol: Rol::Administrador, activo: true, permisos: Permisos::default() },
+        "1234",
+    )?;
+    let medicamentos =
+        bd.crear_familia(&DatosFamilia { nombre: "Medicamentos".into(), alerta_stock: Some(c("5")) })?.id;
+    let higiene = bd.crear_familia(&DatosFamilia { nombre: "Higiene".into(), alerta_stock: None })?.id;
+    let producto = |codigo: &str, nombre: &str, familia: i64, precio: &str, costo: &str| DatosProducto {
+        codigo: codigo.into(),
+        nombre: nombre.into(),
+        familia_id: Some(familia),
+        precio: d(precio),
+        costo: d(costo),
+        activo: true,
+        ..Default::default()
+    };
+    let paracetamol = bd.crear_producto(&producto("PAR-500", "Paracetamol 500 mg c/20", medicamentos, "35", "12"))?;
+    let amoxicilina = bd.crear_producto(&producto("AMX-500", "Amoxicilina 500 mg c/12", medicamentos, "89", "38"))?;
+    let ibuprofeno = bd.crear_producto(&producto("IBU-400", "Ibuprofeno 400 mg c/10", medicamentos, "42", "15"))?;
+    let jarabe = bd.crear_producto(&producto("JRB-120", "Jarabe para la tos 120 ml", medicamentos, "78", "31"))?;
+    let shampoo = bd.crear_producto(&producto("SHA-400", "Shampoo anticaspa 400 ml", higiene, "65", "40"))?;
+    bd.registrar_entrada(shampoo.id, c("12"), "Inventario inicial")?;
+
+    for (producto, numero, dias, cantidad) in [
+        (paracetamol.id, "L2305", -10, "6"),
+        (paracetamol.id, "L2411", 40, "8"),
+        (paracetamol.id, "L2502", 400, "24"),
+        (amoxicilina.id, "AM771", 200, "10"),
+        (ibuprofeno.id, "IB09", -2, "5"),
+        (ibuprofeno.id, "IB12", 300, "12"),
+        (jarabe.id, "JT-88", 25, "4"),
+    ] {
+        bd.agregar_lote(producto, &lote(numero, dias), c(cantidad), Origen::Entrada, "Factura 1180")?;
+    }
+    bd.registrar_entrada(amoxicilina.id, c("3"), "Inventario anterior")?; // sin lote
+
+    bd.abrir_caja(admin.id, d("500"))?;
+    let venta = bd.venta_en_curso(admin.id)?.id;
+    let l2411 = bd.lotes(paracetamol.id)?.into_iter().find(|l| l.numero == "L2411").map(|l| l.id);
+    bd.agregar_de_lote(venta, paracetamol.id, l2411, c("2"), None)?;
+    bd.agregar(venta, shampoo.id, c("1"), None)?;
+    let total = bd.venta(venta)?.totales.total;
+    bd.cobrar(venta, &[Cobro { metodo: Metodo::Efectivo, recibido: total }], None)?;
+    if let Some(ib09) = bd.lotes(ibuprofeno.id)?.into_iter().find(|l| l.numero == "IB09") {
+        bd.retirar_lote(ib09.id)?;
+    }
+    Ok((bd, IdsFarmacia { admin: admin.id, paracetamol: paracetamol.id }))
 }

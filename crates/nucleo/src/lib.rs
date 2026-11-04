@@ -16,6 +16,7 @@ pub mod dinero;
 mod error;
 pub mod exportacion;
 pub mod importacion;
+pub mod lotes;
 pub mod negocio;
 pub mod negocios;
 pub mod reportes;

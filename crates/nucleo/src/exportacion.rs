@@ -4,12 +4,14 @@ use rust_xlsxwriter::{Format, Workbook, Worksheet};
 
 use crate::Resultado;
 use crate::catalogo::Producto;
+use crate::lotes::Lote;
 use crate::negocio::Negocio;
 use crate::reportes::Reporte;
 use crate::ventas::Venta;
 
-/// Mismas columnas que reconoce la importación: se edita en Excel y se vuelve a subir.
-pub fn productos_a_excel(productos: &[Producto]) -> Resultado<Vec<u8>> {
+/// Mismas columnas que reconoce la importación: se edita en Excel y se vuelve a subir. Si hay `lotes` (farmacia),
+/// van en una segunda hoja, que la importación no lee.
+pub fn productos_a_excel(productos: &[Producto], lotes: &[Lote]) -> Resultado<Vec<u8>> {
     let mut libro = Workbook::new();
     let hoja = libro.add_worksheet().set_name("Productos")?;
     let titulos =
@@ -27,6 +29,23 @@ pub fn productos_a_excel(productos: &[Producto]) -> Resultado<Vec<u8>> {
         hoja.write_string(fila, 8, if p.granel { "Sí" } else { "No" })?;
     }
     hoja.autofit();
+
+    if !lotes.is_empty() {
+        let hoy = crate::ahora().date();
+        let hoja = libro.add_worksheet().set_name("Lotes")?;
+        encabezados(hoja, &["Código", "Producto", "Lote", "Fabricación", "Caducidad", "Existencia", "Estado"])?;
+        let fecha = |f: chrono::NaiveDate| f.format("%d/%m/%Y").to_string();
+        for (fila, l) in (1..).zip(lotes) {
+            hoja.write_string(fila, 0, &l.codigo)?;
+            hoja.write_string(fila, 1, &l.producto)?;
+            hoja.write_string(fila, 2, &l.numero)?;
+            hoja.write_string(fila, 3, l.fabricacion.map(fecha).unwrap_or_default())?;
+            hoja.write_string(fila, 4, fecha(l.caducidad))?;
+            hoja.write_number(fila, 5, l.existencia.como_f64())?;
+            hoja.write_string(fila, 6, l.estado(hoy).etiqueta())?;
+        }
+        hoja.autofit();
+    }
     Ok(libro.save_to_buffer()?)
 }
 
@@ -46,8 +65,13 @@ pub fn reporte_a_excel(reporte: &Reporte) -> Resultado<Vec<u8>> {
         ("Ticket promedio", r.promedio),
     ];
     if reporte.con_costos {
-        montos.extend([("Costo", r.costo), ("Utilidad", r.utilidad)]);
+        montos.push(("Costo", r.costo));
+        if r.caducado != crate::Dinero::CERO {
+            montos.push(("Pérdida por caducidad", r.caducado));
+        }
+        montos.push(("Utilidad", r.utilidad));
     }
+    let fila_margen = 4 + montos.len() as u32;
     hoja.write_string_with_format(2, 0, "Ventas", &negrita())?;
     hoja.write_number(2, 1, r.ventas as f64)?;
     hoja.write_string_with_format(3, 0, "Artículos", &negrita())?;
@@ -57,8 +81,8 @@ pub fn reporte_a_excel(reporte: &Reporte) -> Resultado<Vec<u8>> {
         hoja.write_number_with_format(fila, 1, monto.como_f64(), &pesos())?;
     }
     if let Some(margen) = r.margen.filter(|_| reporte.con_costos) {
-        hoja.write_string_with_format(10, 0, "Margen", &negrita())?;
-        hoja.write_number_with_format(10, 1, margen / 100.0, &Format::new().set_num_format("0.0%"))?;
+        hoja.write_string_with_format(fila_margen, 0, "Margen", &negrita())?;
+        hoja.write_number_with_format(fila_margen, 1, margen / 100.0, &Format::new().set_num_format("0.0%"))?;
     }
     hoja.autofit();
 
@@ -165,6 +189,29 @@ mod tests {
         let bytes = reporte_a_excel(&reporte).unwrap();
         assert!(bytes.starts_with(b"PK")); // un .xlsx es un zip
         assert!(textos(&bytes).iter().any(|t| t == "Utilidad"));
+    }
+
+    #[test]
+    fn exporta_los_lotes_y_la_perdida() {
+        use crate::lotes::Origen;
+        use crate::lotes::tests::{en_dias, lote};
+
+        let mut t = Tienda::nueva();
+        let p = t.bd.crear_producto(&crate::catalogo::tests::datos("JRB", "Jarabe", "60", "25")).unwrap();
+        let viejo = t.bd.agregar_lote(p.id, &lote("LT-9", en_dias(-1)), "2".parse().unwrap(), Origen::Entrada, "");
+        t.bd.retirar_lote(viejo.unwrap().id).unwrap();
+
+        let productos = t.bd.buscar_productos("", false, 100).unwrap();
+        let bytes = productos_a_excel(&productos, &t.bd.todos_los_lotes().unwrap()).unwrap();
+        let hojas = textos(&bytes);
+        for esperado in ["Lotes", "LT-9", "Retirado"] {
+            assert!(hojas.iter().any(|t| t == esperado), "{esperado}");
+        }
+
+        let hoy = crate::ahora().date();
+        let filtro = Filtro { desde: hoy, hasta: hoy, cajero_id: None, cliente_id: None };
+        let reporte = t.bd.reporte(&filtro, Seccion::TODOS).unwrap();
+        assert!(textos(&reporte_a_excel(&reporte).unwrap()).iter().any(|t| t == "Pérdida por caducidad"));
     }
 
     #[test]

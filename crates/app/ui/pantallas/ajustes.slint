@@ -6,6 +6,7 @@ import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Cabecera, Columna
 
 export component Ajustes inherits Rectangle {
     property <string> error-negocio;
+    property <int> giro: Api.negocio.giro;
     property <bool> editando-usuario;
     property <UsuarioUi> usuario;
     property <string> error-usuario;
@@ -59,12 +60,19 @@ export component Ajustes inherits Rectangle {
                             iva := Campo { etiqueta: "IVA (%)"; text: Api.negocio.iva; numero: true; width: 70px; }
                         }
                         pie := Campo { etiqueta: "Mensaje al pie del ticket"; text: Api.negocio.pie; }
+                        VerticalLayout {
+                            spacing: 3px;
+                            Text { text: "Tipo de negocio"; font-size: 12px; color: Tema.texto-2; }
+                            ComboBox { model: Api.giros; current-index <=> giro; }
+                            // 2 = Farmacia, en el orden de `Api.giros`.
+                            Nota { text: giro == 2 ? "Maneja lotes con fecha de caducidad: se eligen al vender y lo caducado se retira como pérdida." : "Para lotes con caducidad, elige «Farmacia»."; wrap: word-wrap; }
+                        }
                         if error-negocio != "": Text { text: error-negocio; color: Tema.peligro; }
                         Button {
                             text: "Guardar";
                             primary: true;
                             clicked => {
-                                error-negocio = Api.guardar-negocio({ nombre: nombre.text, direccion: direccion.text, telefono: telefono.text, rfc: rfc.text, iva: iva.text, pie: pie.text });
+                                error-negocio = Api.guardar-negocio({ nombre: nombre.text, direccion: direccion.text, telefono: telefono.text, rfc: rfc.text, iva: iva.text, pie: pie.text, giro: giro });
                             }
                         }
                     }

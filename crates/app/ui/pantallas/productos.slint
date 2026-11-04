@@ -1,17 +1,186 @@
 // Catálogo: buscar, dar de alta, editar, borrar, familias, existencias e importación de Excel.
 
-import { Button, LineEdit, ListView, CheckBox, ComboBox } from "std-widgets.slint";
-import { Api, EditorProductoUi } from "../api.slint";
-import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda } from "../comunes.slint";
+import { Button, LineEdit, ListView, CheckBox, ComboBox, ScrollView } from "std-widgets.slint";
+import { Api, EditorProductoUi, LoteUi } from "../api.slint";
+import { Tema, Panel, Titulo, Subtitulo, Nota, Campo, Dialogo, Insignia, Cabecera, Columna, Renglon, Celda, Palomita } from "../comunes.slint";
+
+/// El color de cada estado de un lote.
+component EstadoLote inherits Insignia {
+    in property <string> clave;
+    tinta: clave == "caducado" ? Tema.peligro : clave == "por_caducar" ? Tema.aviso : clave == "retirado" ? Tema.texto-2 : Tema.exito;
+    fondo: clave == "caducado" ? Tema.peligro-suave : clave == "por_caducar" ? Tema.aviso-suave : clave == "retirado" ? Tema.panel-2 : Tema.exito-suave;
+}
+
+/// Farmacias: los lotes del producto abierto y el alta de uno nuevo. Un clic en un lote lo abre para editarlo,
+/// contarlo o retirarlo.
+component Lotes inherits VerticalLayout {
+    in property <string> unidad;
+    callback resultado(string);
+    property <bool> agregando;
+    property <bool> ya-estaba;
+    property <string> referencia;
+    spacing: 6px;
+    Subtitulo { text: "Lotes"; }
+    if Api.lotes.length == 0: Nota { text: "Sin lotes. Agrega uno cuando llegue mercancía, o asígnale lote a la que ya tienes."; wrap: word-wrap; }
+    if Api.lotes.length > 0: Panel {
+        height: min(Api.lotes.length, 4) * 28px + 2px;
+        ListView {
+            for l[i] in Api.lotes: Renglon {
+                indice: i;
+                height: 28px;
+                clicked => { Api.lote-abierto = i; }
+                Celda { text: l.numero; font-size: 12px; fuerte: true; }
+                Celda { text: l.caducidad; font-size: 11px; width: 72px; tenue: true; }
+                Celda { text: l.existencia; font-size: 12px; width: 60px; derecha: true; }
+                HorizontalLayout {
+                    width: 84px;
+                    alignment: end;
+                    if l.clave != "vigente": EstadoLote { text: l.estado; clave: l.clave; y: 5px; }
+                }
+            }
+        }
+    }
+    if Api.lotes.length > 0 && Api.editor.sin-lote.to-float() > 0: Nota { text: "Sin lote: " + Api.editor.sin-lote + " " + unidad; }
+    if Api.puede-inventario && !agregando: Button { text: "+ Agregar lote"; clicked => { agregando = true; ya-estaba = false; referencia = ""; } }
+    if Api.puede-inventario && agregando: VerticalLayout {
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 6px;
+            numero := Campo { etiqueta: "Lote"; placeholder: "A2304"; init => { self.enfocar(); } }
+            caducidad := Campo { etiqueta: "Caducidad"; placeholder: "dd/mm/aaaa"; width: 130px; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            fabricacion := Campo { etiqueta: "Fabricación"; placeholder: "dd/mm/aaaa (opcional)"; }
+            cantidad := Campo { etiqueta: "Cantidad"; numero: true; width: 100px; }
+        }
+        if Api.editor.sin-lote.to-float() > 0: CheckBox {
+            text: "Ya está en la existencia (" + Api.editor.sin-lote + " sin lote)";
+            checked <=> ya-estaba;
+        }
+        if !ya-estaba: Campo { etiqueta: "Factura / proveedor"; text: referencia; edited(t) => { referencia = t; } }
+        HorizontalLayout {
+            spacing: 6px;
+            Button { text: "Cancelar"; clicked => { agregando = false; } }
+            Button {
+                text: ya-estaba ? "Asignar lote" : "Registrar entrada";
+                primary: true;
+                enabled: numero.text != "" && caducidad.text != "" && cantidad.text != "";
+                clicked => {
+                    let error = Api.agregar-lote({
+                        producto: Api.editor.id,
+                        numero: numero.text,
+                        fabricacion: fabricacion.text,
+                        caducidad: caducidad.text,
+                        cantidad: cantidad.text,
+                        ya-estaba: ya-estaba,
+                        referencia: ya-estaba ? "" : referencia,
+                    });
+                    if error == "" { agregando = false; }
+                    root.resultado(error);
+                }
+            }
+        }
+    }
+}
+
+/// Editar, contar o retirar el lote `Api.lotes[Api.lote-abierto]`.
+component EditarLote inherits Dialogo {
+    property <LoteUi> lote: Api.lotes[Api.lote-abierto];
+    property <string> error;
+    property <bool> confirmando;
+    titulo: "Lote " + lote.numero + " — " + Api.editor.nombre;
+    ancho: 440px;
+    HorizontalLayout {
+        spacing: 8px;
+        EstadoLote { text: lote.estado; clave: lote.clave; }
+        Nota { text: "Quedan " + lote.existencia; vertical-alignment: center; }
+        Rectangle { }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        numero := Campo { etiqueta: "Lote"; text: lote.numero; }
+        caducidad := Campo { etiqueta: "Caducidad"; text: lote.caducidad; placeholder: "dd/mm/aaaa"; width: 130px; }
+        fabricacion := Campo { etiqueta: "Fabricación"; text: lote.fabricacion; placeholder: "Opcional"; width: 130px; }
+    }
+    if Api.puede-inventario: HorizontalLayout {
+        alignment: end;
+        Button {
+            text: "Guardar cambios";
+            clicked => {
+                error = Api.editar-lote(lote.id, numero.text, fabricacion.text, caducidad.text);
+                if error == "" { root.cerrar(); }
+            }
+        }
+    }
+    if Api.puede-inventario: HorizontalLayout {
+        spacing: 8px;
+        contada := Campo { etiqueta: "Conteo físico: hay realmente"; numero: true; }
+        VerticalLayout {
+            alignment: end;
+            Button {
+                text: "Ajustar";
+                enabled: contada.text != "";
+                clicked => {
+                    error = Api.contar-lote(lote.id, contada.text);
+                    if error == "" { root.cerrar(); }
+                }
+            }
+        }
+    }
+    if Api.puede-inventario && !confirmando: HorizontalLayout {
+        Button { text: "Retirar del inventario…"; clicked => { confirmando = true; } }
+        Rectangle { }
+    }
+    if confirmando: Rectangle {
+        background: Tema.peligro-suave;
+        height: aviso.preferred-height + 16px;
+        aviso := VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+            Text {
+                text: "Se sacan " + lote.existencia + " del inventario y cuentan como pérdida por caducidad" + (Api.puede-productos ? " (" + lote.perdida + ")." : ".");
+                color: Tema.peligro;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: end;
+                Button { text: "No"; clicked => { confirmando = false; } }
+                Button {
+                    text: "Sí, retirar";
+                    primary: true;
+                    clicked => {
+                        error = Api.retirar-lote(lote.id);
+                        if error == "" { root.cerrar(); }
+                    }
+                }
+            }
+        }
+    }
+    if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
+}
 
 /// Existencia, entradas, conteos y últimos movimientos del producto abierto. Las entradas y los conteos solo
-/// aparecen para quien maneja el inventario.
+/// aparecen para quien maneja el inventario. En una farmacia, primero los lotes; lo de sin lote queda a un clic.
 component Existencias inherits VerticalLayout {
     in property <bool> granel;
     callback resultado(string); // vacío si salió bien; si no, el error
+    property <bool> sin-lote-abierto;
     spacing: 8px;
     Subtitulo { text: "Existencia: " + Api.editor.existencia + " " + (granel ? "kg" : Api.editor.unidad); }
-    if Api.puede-inventario: VerticalLayout {
+    if Api.es-farmacia: Lotes {
+        unidad: granel ? "kg" : Api.editor.unidad;
+        resultado(mensaje) => { root.resultado(mensaje); }
+    }
+    if Api.es-farmacia && Api.puede-inventario: HorizontalLayout {
+        Button {
+            text: sin-lote-abierto ? "Ocultar entrada y conteo sin lote" : "Entrada o conteo sin lote…";
+            clicked => { sin-lote-abierto = !sin-lote-abierto; }
+        }
+        Rectangle { }
+    }
+    if Api.puede-inventario && (!Api.es-farmacia || sin-lote-abierto): VerticalLayout {
         spacing: 8px;
         entrada := Campo { etiqueta: "Llegó mercancía (cantidad)"; numero: true; }
         referencia := Campo { etiqueta: "Factura / proveedor"; }
@@ -37,7 +206,7 @@ component Existencias inherits VerticalLayout {
     }
     Text { text: "Últimos movimientos"; font-size: 12px; color: Tema.texto-2; font-weight: 700; }
     Panel {
-        min-height: 160px;
+        min-height: Api.es-farmacia ? 100px : 160px;
         ListView {
             for m[i] in Api.movimientos: Renglon {
                 indice: i;
@@ -53,7 +222,7 @@ component Existencias inherits VerticalLayout {
 /// Para quien maneja el inventario pero no los productos: ve el producto y mueve su existencia, sin editarlo.
 component VerExistencias inherits Dialogo {
     titulo: Api.editor.nombre;
-    ancho: 420px;
+    ancho: Api.es-farmacia ? 460px : 420px;
     property <string> error;
     Nota { text: Api.editor.codigo + " · " + Api.pesos(Api.editor.precio.to-float()) + (Api.editor.granel ? " por kg" : " por " + Api.editor.unidad); }
     Existencias {
@@ -69,7 +238,7 @@ component VerExistencias inherits Dialogo {
 
 component EditorProducto inherits Dialogo {
     titulo: Api.editor.id == 0 ? "Nuevo producto" : Api.editor.nombre;
-    ancho: 900px;
+    ancho: Api.es-farmacia ? 980px : 900px;
     property <int> familia: Api.editor.familia-indice;
     property <bool> granel: Api.editor.granel;
     property <bool> activo: Api.editor.activo;
@@ -165,7 +334,7 @@ component EditorProducto inherits Dialogo {
         }
         // Columna derecha: existencias (solo productos ya guardados).
         if Api.editor.id != 0: Existencias {
-            width: 250px;
+            width: Api.es-farmacia ? 330px : 250px;
             granel: granel;
             resultado(mensaje) => { error = mensaje; }
         }
@@ -257,14 +426,68 @@ component Familias inherits Dialogo {
     if error != "": Text { text: error; color: Tema.peligro; }
 }
 
+/// Farmacias: los lotes caducados y los que caducan pronto, de todo el catálogo, para retirarlos.
+component Caducidades inherits Panel {
+    callback retirar(int); // índice en `Api.avisos-caducidad`
+    VerticalLayout {
+        Cabecera {
+            Columna { text: "Caducidad"; width: 90px; }
+            Columna { text: "Producto"; }
+            Columna { text: "Lote"; width: 120px; }
+            Columna { text: "Existencia"; width: 90px; derecha: true; }
+            if Api.puede-productos: Columna { text: "Pérdida"; width: 90px; derecha: true; }
+            Columna { text: "Estado"; width: 100px; }
+            if Api.puede-inventario: Rectangle { width: 90px; }
+        }
+        if Api.avisos-caducidad.length == 0: Rectangle {
+            Nota { text: "Ningún lote caducado ni por caducar en los próximos 60 días."; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        ListView {
+            for l[i] in Api.avisos-caducidad: Renglon {
+                indice: i;
+                Celda { text: l.caducidad; width: 90px; fuerte: l.clave == "caducado"; }
+                HorizontalLayout {
+                    spacing: 6px;
+                    Celda { text: l.producto; }
+                    Celda { text: l.codigo; tenue: true; width: 90px; }
+                }
+                Celda { text: l.numero; width: 120px; }
+                Celda { text: l.existencia; width: 90px; derecha: true; }
+                if Api.puede-productos: Celda { text: l.perdida; width: 90px; derecha: true; tenue: true; }
+                HorizontalLayout {
+                    width: 100px;
+                    alignment: start;
+                    EstadoLote { text: l.estado; clave: l.clave; y: 6px; }
+                }
+                if Api.puede-inventario: HorizontalLayout {
+                    width: 90px;
+                    padding-top: 3px;
+                    padding-bottom: 3px;
+                    Button { text: "Retirar"; clicked => { root.retirar(i); } }
+                }
+            }
+        }
+    }
+}
+
 export component Productos inherits Rectangle {
     property <bool> inactivos;
     property <bool> por-surtir;
     property <bool> viendo-familias;
-    init => { Api.buscar-productos("", false, false); }
+    property <bool> caducidades: Api.es-farmacia && Api.viendo-caducidades;
+    property <int> retirando: -1;
+    property <string> error-retiro;
+    property <bool> borrando-marcados;
+    property <string> error-borrado;
+    property <bool> todos-marcados: Api.productos.length > 0 && Api.marcados == Api.productos.length;
+    init => {
+        Api.buscar-productos("", false, false);
+        if caducidades { Api.cargar-caducidades(); }
+    }
 
+    property <string> texto;
     function buscar() {
-        Api.buscar-productos(consulta.text, inactivos, por-surtir);
+        Api.buscar-productos(texto, inactivos, por-surtir);
     }
 
     VerticalLayout {
@@ -272,27 +495,53 @@ export component Productos inherits Rectangle {
         spacing: 10px;
         HorizontalLayout {
             spacing: 8px;
-            Titulo { text: "Productos"; vertical-alignment: center; }
+            Titulo { text: caducidades ? "Caducidades" : "Productos"; vertical-alignment: center; }
+            if Api.es-farmacia: Button {
+                text: caducidades ? "← Volver a productos" : Api.caducados == 1 ? "Caducidades (1 caducado)" : Api.caducados > 1 ? "Caducidades (" + Api.caducados + " caducados)" : "Caducidades";
+                clicked => {
+                    Api.viendo-caducidades = !caducidades;
+                    if Api.viendo-caducidades { Api.cargar-caducidades(); } else { buscar(); }
+                }
+            }
             Rectangle { }
             if Api.puede-productos: Button { text: "Familias"; clicked => { viendo-familias = true; } }
             if Api.puede-productos: Button { text: "Importar Excel"; clicked => { Api.elegir-importacion(); } }
             if Api.puede-productos: Button { text: "Exportar Excel"; clicked => { Api.exportar-productos(); } }
             if Api.puede-productos: Button { text: "Nuevo producto"; primary: true; clicked => { Api.editar-producto(0); } }
         }
-        HorizontalLayout {
+        if caducidades: Nota { text: "Lo caducado ya no se puede vender. Al sacarlo del anaquel, «Retirar» lo quita del inventario y su costo cuenta como pérdida en los reportes."; wrap: word-wrap; }
+        if caducidades: Caducidades {
+            retirar(i) => { error-retiro = ""; retirando = i; }
+        }
+        if !caducidades: HorizontalLayout {
             spacing: 14px;
-            consulta := LineEdit {
+            LineEdit {
                 width: 380px;
+                text: texto;
                 placeholder-text: "Buscar por código, código de barras, nombre o familia";
-                edited => { buscar(); }
+                edited(t) => { texto = t; buscar(); }
             }
             CheckBox { text: "Solo por surtir"; checked <=> por-surtir; toggled => { buscar(); } }
             CheckBox { text: "Incluir desactivados"; checked <=> inactivos; toggled => { buscar(); } }
             Rectangle { }
+            if Api.puede-productos && Api.marcados > 0: Text {
+                text: Api.marcados == 1 ? "1 seleccionado" : Api.marcados + " seleccionados";
+                color: Tema.texto-2;
+                vertical-alignment: center;
+            }
+            if Api.puede-productos && Api.marcados > 0: Button { text: "Quitar selección"; clicked => { Api.marcar-todos(false); } }
+            if Api.puede-productos && Api.marcados > 0: Button {
+                text: "Borrar seleccionados";
+                clicked => { error-borrado = ""; borrando-marcados = true; }
+            }
         }
-        Panel {
+        if !caducidades: Panel {
             VerticalLayout {
                 Cabecera {
+                    if Api.puede-productos: Palomita {
+                        marcado: todos-marcados;
+                        clic => { Api.marcar-todos(!todos-marcados); }
+                    }
                     Columna { text: "Código"; width: 130px; }
                     Columna { text: "Nombre"; }
                     Columna { text: "Familia"; width: 130px; }
@@ -307,7 +556,12 @@ export component Productos inherits Rectangle {
                 ListView {
                     for p[i] in Api.productos: Renglon {
                         indice: i;
+                        seleccionado: p.marcado;
                         clicked => { if Api.puede-productos || Api.puede-inventario { Api.editar-producto(p.id); } }
+                        if Api.puede-productos: Palomita {
+                            marcado: p.marcado;
+                            clic => { Api.marcar-producto(p.id, !p.marcado); }
+                        }
                         Celda { text: p.codigo; width: 130px; tenue: true; }
                         HorizontalLayout {
                             spacing: 6px;
@@ -338,6 +592,81 @@ export component Productos inherits Rectangle {
 
     if Api.editando && !Api.puede-productos: VerExistencias {
         cerrar => { Api.cerrar-editor(); buscar(); }
+    }
+
+    if Api.editando && Api.lote-abierto >= 0 && Api.lote-abierto < Api.lotes.length: EditarLote {
+        cerrar => { Api.lote-abierto = -1; }
+    }
+
+    if borrando-marcados && Api.marcados > 0: Dialogo {
+        titulo: Api.marcados == 1 ? "Borrar 1 producto" : "Borrar " + Api.marcados + " productos";
+        ancho: 460px;
+        cerrar => { borrando-marcados = false; }
+        Text {
+            text: "Se quitan del catálogo y de las ventas en pausa. Las ventas que ya se cobraron y los reportes los conservan.";
+            color: Tema.texto-2;
+            wrap: word-wrap;
+        }
+        Panel {
+            height: Math.min(Api.marcados, 8) * 24px + 12px;
+            ScrollView {
+                VerticalLayout {
+                    padding: 6px;
+                    // Los que no están palomeados quedan vacíos, sin alto.
+                    for p in Api.productos: VerticalLayout {
+                        if p.marcado: HorizontalLayout {
+                            height: 24px;
+                            padding-left: 4px;
+                            padding-right: 4px;
+                            spacing: 8px;
+                            Celda { text: p.codigo; width: 110px; tenue: true; }
+                            Celda { text: p.nombre; }
+                        }
+                    }
+                }
+            }
+        }
+        if error-borrado != "": Text { text: error-borrado; color: Tema.peligro; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button { text: "Cancelar"; clicked => { borrando-marcados = false; } }
+            Button {
+                text: Api.marcados == 1 ? "Sí, borrar 1 producto" : "Sí, borrar " + Api.marcados + " productos";
+                primary: true;
+                clicked => {
+                    error-borrado = Api.borrar-marcados();
+                    if error-borrado == "" { borrando-marcados = false; }
+                }
+            }
+        }
+    }
+
+    if retirando >= 0 && retirando < Api.avisos-caducidad.length: Dialogo {
+        property <LoteUi> lote: Api.avisos-caducidad[retirando];
+        titulo: "Retirar el lote " + lote.numero;
+        ancho: 420px;
+        cerrar => { retirando = -1; }
+        Text { text: lote.producto + " · " + lote.estado.to-lowercase() + " (" + lote.caducidad + ")"; color: Tema.texto; font-weight: 700; wrap: word-wrap; }
+        Text {
+            text: "Se sacan " + lote.existencia + " del inventario y cuentan como pérdida por caducidad" + (Api.puede-productos ? " (" + lote.perdida + ")." : ".");
+            color: Tema.texto-2;
+            wrap: word-wrap;
+        }
+        if error-retiro != "": Text { text: error-retiro; color: Tema.peligro; wrap: word-wrap; }
+        HorizontalLayout {
+            spacing: 8px;
+            alignment: end;
+            Button { text: "Cancelar"; clicked => { retirando = -1; } }
+            Button {
+                text: "Retirar";
+                primary: true;
+                clicked => {
+                    error-retiro = Api.retirar-lote(lote.id);
+                    if error-retiro == "" { retirando = -1; }
+                }
+            }
+        }
     }
 
     if Api.importando: Dialogo {

@@ -44,6 +44,33 @@ export struct ProductoUi {
     activo: bool,
     alerta: bool,
     otros-precios: int,
+    marcado: bool,      // palomeado para borrar varios
+}
+
+/// Un lote de un producto (farmacias). En las opciones al vender, id 0 = «sin lote».
+export struct LoteUi {
+    id: int,
+    producto-id: int,
+    codigo: string,
+    producto: string,
+    numero: string,
+    fabricacion: string, // dd/mm/aaaa o vacío
+    caducidad: string,   // dd/mm/aaaa
+    existencia: string,  // «10 pza»
+    estado: string,      // «Vigente», «Por caducar», «Caducado», «Retirado»
+    clave: string,       // vigente, por_caducar, caducado, retirado
+    perdida: string,     // lo que costaría retirarlo hoy
+}
+
+/// Lo que se captura al agregar un lote a un producto.
+export struct NuevoLoteUi {
+    producto: int,
+    numero: string,
+    fabricacion: string,
+    caducidad: string,
+    cantidad: string,
+    ya-estaba: bool,    // la mercancía ya estaba en la existencia, sin lote
+    referencia: string, // factura o proveedor, si llegó
 }
 
 export struct PartidaUi {
@@ -60,6 +87,8 @@ export struct PartidaUi {
     pendiente: string,  // lo que aún se puede devolver
     a-devolver: string, // lo que se está capturando en una devolución
     sugerencia: string, // «Mayoreo $1.25» si la cantidad ya alcanza otro precio
+    lote: string,       // «Lote A1 · cad. 03/2027» (farmacias)
+    pide-lote: bool,    // el producto tiene lotes y la partida no lleva ninguno
 }
 
 export struct FilaUi {
@@ -67,6 +96,7 @@ export struct FilaUi {
     etiqueta: string,
     valor: string,
     proporcion: float,  // 0..1, para barras
+    negativo: bool,     // una pérdida
 }
 
 export struct VentaUi {
@@ -121,6 +151,7 @@ export struct EditorProductoUi {
     alerta: string,
     activo: bool,
     existencia: string,
+    sin-lote: string,   // existencia que no está en ningún lote (farmacias)
     precios: [PrecioUi],
 }
 
@@ -172,6 +203,8 @@ export struct ReporteUi {
     promedio: string,
     utilidad: string,
     margen: string,
+    caducado: string,   // pérdida por caducidad; vacío si no hubo o no se ven costos
+    utilidad-negativa: bool,
     apartados: [ApartadoUi],
 }
 
@@ -182,6 +215,7 @@ export struct NegocioUi {
     rfc: string,
     iva: string,
     pie: string,
+    giro: int,          // en `giros`
 }
 
 export struct ImpresoraUi {
@@ -215,11 +249,14 @@ export global Api {
     in property <bool> reporte-propio;   // el reporte se limita a las ventas de quien entró
     in property <string> usuario;
     in property <string> negocio-nombre;
+    in property <[string]> giros;                // tipos de negocio: abarrotes, ferretería, farmacia
+    in property <bool> es-farmacia;              // maneja lotes y caducidades
+    in property <int> caducados;                 // lotes caducados por retirar
     in property <string> fecha-larga;
     in property <[UsuarioUi]> usuarios-login;
     in-out property <string> pantalla: "venta";
     pure callback pesos(float) -> string;          // 1234.5 → «$1,234.50»
-    callback configurar(string, string, string) -> string;  // negocio, nombre, pin → error
+    callback configurar(string, int, string, string) -> string;  // negocio, giro, nombre, pin → error
     callback entrar(int, string) -> bool;
     callback salir();
     callback cambiar-mi-pin(string) -> string;
@@ -246,6 +283,8 @@ export global Api {
     in property <ProductoUi> producto-pendiente;
     in property <[PrecioUi]> opciones-precio;
     in property <int> precio-sugerido;            // la opción que se propone (la cantidad alcanza ese mayoreo)
+    in property <bool> pide-lote;
+    in property <[LoteUi]> opciones-lote;         // el que caduca primero va al principio
     in property <bool> mostrando-cobrada;
     in property <VentaUi> cobrada;
     in property <string> cambio;
@@ -261,6 +300,8 @@ export global Api {
     callback sumar(int, int);              // partida, ±1
     callback quitar(int);
     callback cambiar-precio(int);          // partida: vuelve a preguntar el precio
+    callback elegir-lote(int);             // id del lote; 0 = sin lote
+    callback cambiar-lote(int);            // partida: pregunta de qué lote sale
     callback aplicar-descuento(string);
     callback buscar-clientes(string);
     callback asignar-cliente(int);         // 0 = público general
@@ -332,11 +373,25 @@ export global Api {
     callback editar-otro-precio(int, int, string); // renglón, campo (0 nombre, 1 precio, 2 desde), valor
     callback cerrar-editor();
     callback borrar-producto(int) -> string;
+    in property <int> marcados;            // cuántos productos están palomeados
+    callback marcar-producto(int, bool);   // id, palomeado
+    callback marcar-todos(bool);           // todos los que se ven en la lista
+    callback borrar-marcados() -> string;
     callback crear-familia(string, string) -> int;    // nombre, aviso → su índice en `familias-nombres` (-1 si falló)
     callback renombrar-familia(int, string, string) -> string;
     callback borrar-familia(int);
     callback registrar-entrada(int, string, string) -> string;
     callback ajustar-existencia(int, string, string) -> string;
+    // Lotes (farmacias)
+    in property <[LoteUi]> lotes;                  // los del producto abierto
+    in-out property <int> lote-abierto: -1;        // en `lotes`, para editarlo
+    in property <[LoteUi]> avisos-caducidad;       // caducados y por caducar, de todo el catálogo
+    in-out property <bool> viendo-caducidades;
+    callback agregar-lote(NuevoLoteUi) -> string;
+    callback editar-lote(int, string, string, string) -> string; // id, número, fabricación, caducidad
+    callback contar-lote(int, string) -> string;   // id, cantidad contada
+    callback retirar-lote(int) -> string;
+    callback cargar-caducidades();
     callback elegir-importacion();
     callback confirmar-importacion();
     callback cerrar-importacion();

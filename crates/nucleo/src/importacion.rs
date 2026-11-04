@@ -1057,7 +1057,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let ruta = dir.path().join("productos.xlsx");
-        std::fs::write(&ruta, crate::exportacion::productos_a_excel(&productos).unwrap()).unwrap();
+        std::fs::write(&ruta, crate::exportacion::productos_a_excel(&productos, &[]).unwrap()).unwrap();
 
         let renglones = leer_excel(&ruta).unwrap();
         let leido = renglones.iter().find_map(|r| r.datos.as_ref().ok().filter(|d| d.codigo == "007")).unwrap();

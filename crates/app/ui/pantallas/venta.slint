@@ -28,7 +28,7 @@ export component Venta inherits Rectangle {
     property <bool> cotizando;
     property <bool> eligiendo-cliente;
     property <bool> vacia: Api.venta.partidas.length == 0;
-    property <bool> hay-dialogo: cobrando || pausando || cotizando || eligiendo-cliente || Api.pide-precio || Api.pide-peso
+    property <bool> hay-dialogo: cobrando || pausando || cotizando || eligiendo-cliente || Api.pide-precio || Api.pide-peso || Api.pide-lote
         || Api.mostrando-cobrada || !Api.caja-abierta;
 
     public function enfocar() {
@@ -113,6 +113,26 @@ export component Venta inherits Rectangle {
                                 HorizontalLayout {
                                     spacing: 6px;
                                     Celda { text: p.descripcion; }
+                                    // Farmacias: de qué lote sale; se cambia con un clic.
+                                    if p.lote != "" || p.pide-lote: Rectangle {
+                                        width: lote-texto.preferred-width + 12px;
+                                        height: 20px;
+                                        y: 8px;
+                                        background: p.pide-lote ? Tema.peligro-suave : cambiar-lote.has-hover ? Tema.panel-2 : Tema.fondo;
+                                        border-color: p.pide-lote ? Tema.peligro : Tema.borde;
+                                        border-width: 1px;
+                                        border-radius: 3px;
+                                        lote-texto := Text {
+                                            text: p.pide-lote ? "Elegir lote" : p.lote;
+                                            color: p.pide-lote ? Tema.peligro : Tema.texto-2;
+                                            font-size: 11px;
+                                            font-weight: p.pide-lote ? 700 : 400;
+                                        }
+                                        cambiar-lote := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { Api.cambiar-lote(p.id); }
+                                        }
+                                    }
                                     if p.sugerencia != "": Rectangle {
                                         width: sugerida.preferred-width + 12px;
                                         height: 20px;
@@ -307,6 +327,49 @@ export component Venta inherits Rectangle {
                         Text { text: o.precio; font-size: 15px; font-weight: 700; color: Tema.texto; horizontal-alignment: right; vertical-alignment: center; }
                     }
                     toque := TouchArea { clicked => { Api.elegir-precio(o.id); enfocar(); } }
+                }
+            }
+        }
+    }
+
+    if Api.pide-lote: Dialogo {
+        titulo: "¿De qué lote? — " + Api.producto-pendiente.nombre;
+        ancho: 480px;
+        cerrar => { Api.cancelar-pendiente(); enfocar(); }
+        property <int> elegido: 0;
+        FocusScope {
+            init => { self.focus(); }
+            key-pressed(e) => {
+                if e.text == Key.DownArrow { elegido = Math.mod(elegido + 1, Api.opciones-lote.length); return accept; }
+                if e.text == Key.UpArrow { elegido = Math.mod(elegido - 1 + Api.opciones-lote.length, Api.opciones-lote.length); return accept; }
+                if e.text == Key.Return { Api.elegir-lote(Api.opciones-lote[elegido].id); enfocar(); return accept; }
+                if e.text == Key.Escape { Api.cancelar-pendiente(); enfocar(); return accept; }
+                if e.text.is-float() && e.text.to-float() >= 1 && e.text.to-float() <= Api.opciones-lote.length {
+                    Api.elegir-lote(Api.opciones-lote[e.text.to-float() - 1].id);
+                    enfocar();
+                    return accept;
+                }
+                reject
+            }
+            VerticalLayout {
+                spacing: 4px;
+                Nota { text: "El que caduca primero va arriba. ↑↓ y Enter, o el número de la opción."; }
+                for o[i] in Api.opciones-lote: Rectangle {
+                    height: 40px;
+                    background: i == elegido ? Tema.acento-suave : toque-lote.has-hover ? Tema.panel-2 : Tema.panel;
+                    border-color: i == elegido ? Tema.acento : Tema.borde;
+                    border-width: 1px;
+                    HorizontalLayout {
+                        padding-left: 10px;
+                        padding-right: 10px;
+                        spacing: 8px;
+                        Text { text: (i + 1) + "."; color: Tema.texto-3; vertical-alignment: center; width: 18px; }
+                        Text { text: o.id == 0 ? o.numero : "Lote " + o.numero; font-weight: 700; color: Tema.texto; vertical-alignment: center; }
+                        if o.caducidad != "": Text { text: "caduca " + o.caducidad; color: Tema.texto-2; vertical-alignment: center; }
+                        if o.clave == "por_caducar": Insignia { text: "por caducar"; tinta: Tema.aviso; fondo: Tema.aviso-suave; y: 10px; }
+                        Text { text: "quedan " + o.existencia; color: Tema.texto; horizontal-alignment: right; vertical-alignment: center; }
+                    }
+                    toque-lote := TouchArea { clicked => { Api.elegir-lote(o.id); enfocar(); } }
                 }
             }
         }

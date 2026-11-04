@@ -159,6 +159,10 @@ pub fn ticket(ticket: &Ticket) -> Documento {
     for p in &venta.partidas {
         doc.texto(&p.descripcion);
         doc.par(format!("  {} {} x {}", p.cantidad, p.unidad, precio_por(p)), p.importe.pesos());
+        if let Some(lote) = &p.lote {
+            let caducidad = p.caducidad.map(|c| format!("  Cad. {}", c.format("%d/%m/%Y"))).unwrap_or_default();
+            doc.texto(format!("  Lote {lote}{caducidad}"));
+        }
     }
     doc.separador();
 

@@ -39,6 +39,9 @@ pub struct Resumen {
     pub articulos: Cantidad,
     pub promedio: Dinero,
     pub costo: Dinero,
+    /// Lo que costó la mercancía que se retiró por caducidad: una pérdida.
+    pub caducado: Dinero,
+    /// Total menos el costo de lo vendido y menos lo caducado; negativa si se perdió más de lo que se ganó.
     pub utilidad: Dinero,
     /// Utilidad sobre lo vendido, en %.
     pub margen: Option<f64>,
@@ -49,6 +52,7 @@ enum_texto! {
         Evolucion = "evolucion", "Evolución de ventas";
         Familias = "familias", "Ventas por familia";
         Ganancia = "ganancia", "Ganancia por familia";
+        Caducados = "caducados", "Pérdida por caducidad";
         Productos = "productos", "Productos más vendidos";
         Empleados = "empleados", "Ventas por empleado";
         Clientes = "clientes", "Ventas por cliente";
@@ -81,9 +85,10 @@ impl Reporte {
     /// Borra lo que revela el costo de la mercancía.
     pub fn ocultar_costos(&mut self) {
         self.resumen.costo = Dinero::default();
+        self.resumen.caducado = Dinero::default();
         self.resumen.utilidad = Dinero::default();
         self.resumen.margen = None;
-        self.apartados.retain(|a| a.seccion != Seccion::Ganancia);
+        self.apartados.retain(|a| !matches!(a.seccion, Seccion::Ganancia | Seccion::Caducados));
         self.con_costos = false;
     }
 }
@@ -130,6 +135,15 @@ const BASE: &str = "
                -((pd.cantidad * pa.costo + 500) / 1000),
                -pd.cantidad
         FROM partidas_devueltas pd JOIN d ON d.id = pd.devolucion_id JOIN partidas pa ON pa.id = pd.partida_id
+    ),
+    -- Lo retirado por caducidad, a su costo de ese momento. No es de ningún cajero ni cliente: con esos filtros
+    -- no cuenta.
+    perdidas AS (
+        SELECT m.producto_id, m.lote_id, (-m.cantidad * coalesce(m.costo, 0) + 500) / 1000 AS monto
+        FROM movimientos m
+        WHERE m.tipo = 'caducidad'
+          AND m.creado >= :desde AND m.creado < date(:hasta, '+1 day')
+          AND :cajero IS NULL AND :cliente IS NULL
     )";
 
 const POR_FAMILIA: &str = "
@@ -153,7 +167,10 @@ impl Bd {
     /// ventas y sin costos. La pantalla y el Excel salen de aquí para que muestren lo mismo.
     pub fn reporte_para(&self, usuario: &Usuario, filtro: &Filtro) -> Resultado<Reporte> {
         if usuario.es_admin() {
-            return self.reporte(filtro, Seccion::TODOS);
+            let mut reporte = self.reporte(filtro, Seccion::TODOS)?;
+            // Solo aparece si hubo pérdidas (en la práctica, en farmacias).
+            reporte.apartados.retain(|a| a.seccion != Seccion::Caducados || !a.filas.is_empty());
+            return Ok(reporte);
         }
         if !usuario.puede(Permiso::VerReportes) {
             return Err(Error::SinPermiso);
@@ -172,14 +189,22 @@ struct Consulta<'a> {
 
 impl Consulta<'_> {
     fn resumen(&self) -> Resultado<Resumen> {
-        let (ventas, vendido, devoluciones, articulos, costo): (i64, Dinero, Dinero, Cantidad, Dinero) = self.fila(
+        let (ventas, vendido, devoluciones, articulos, costo, caducado): (
+            i64,
+            Dinero,
+            Dinero,
+            Cantidad,
+            Dinero,
+            Dinero,
+        ) = self.fila(
             "SELECT (SELECT count(*) FROM v), (SELECT coalesce(sum(total), 0) FROM v),
-                    (SELECT coalesce(sum(reembolso), 0) FROM d),
-                    (SELECT coalesce(sum(unidades), 0) FROM lineas), (SELECT coalesce(sum(costo), 0) FROM lineas)",
-            |f| Ok((f.get(0)?, f.get(1)?, f.get(2)?, f.get(3)?, f.get(4)?)),
+                        (SELECT coalesce(sum(reembolso), 0) FROM d),
+                        (SELECT coalesce(sum(unidades), 0) FROM lineas), (SELECT coalesce(sum(costo), 0) FROM lineas),
+                        (SELECT coalesce(sum(monto), 0) FROM perdidas)",
+            |f| Ok((f.get(0)?, f.get(1)?, f.get(2)?, f.get(3)?, f.get(4)?, f.get(5)?)),
         )?;
         let total = vendido - devoluciones;
-        let utilidad = total - costo;
+        let utilidad = total - costo - caducado;
         Ok(Resumen {
             ventas,
             vendido,
@@ -188,6 +213,7 @@ impl Consulta<'_> {
             articulos,
             promedio: if ventas > 0 { Dinero::crudo(vendido.como_crudo() / ventas) } else { Dinero::CERO },
             costo,
+            caducado,
             utilidad,
             margen: total.es_positivo().then(|| utilidad.como_f64() / total.como_f64() * 100.0),
         })
@@ -203,10 +229,24 @@ impl Consulta<'_> {
                 &format!("SELECT coalesce(f.nombre, 'Sin familia'), sum(l.importe) {POR_FAMILIA}"),
                 None,
             ),
+            // Lo caducado resta a la ganancia de su familia, para que sumen la utilidad.
             Seccion::Ganancia => self.ranking::<String>(
-                &format!("SELECT coalesce(f.nombre, 'Sin familia'), sum(l.importe - l.costo) {POR_FAMILIA}"),
+                "SELECT coalesce(f.nombre, 'Sin familia'), sum(g.monto)
+                 FROM (SELECT producto_id, importe - costo AS monto FROM lineas
+                       UNION ALL SELECT producto_id, -monto FROM perdidas) g
+                 JOIN productos p ON p.id = g.producto_id LEFT JOIN familias f ON f.id = p.familia_id
+                 GROUP BY 1",
                 None,
             ),
+            // En negativo, la pérdida más grande primero.
+            Seccion::Caducados => {
+                let filas = self.lista::<String>(
+                    "SELECT p.nombre || coalesce(' · lote ' || l.numero, ''), -sum(pe.monto)
+                     FROM perdidas pe JOIN productos p ON p.id = pe.producto_id LEFT JOIN lotes l ON l.id = pe.lote_id
+                     GROUP BY pe.producto_id, pe.lote_id ORDER BY 2, 1",
+                )?;
+                Ok(filas.into_iter().map(|(etiqueta, monto)| Fila { etiqueta, monto }).collect())
+            }
             Seccion::Productos => {
                 self.ranking::<String>("SELECT descripcion, sum(importe) FROM lineas GROUP BY producto_id", Some(15))
             }
@@ -413,6 +453,63 @@ mod tests {
     }
 
     #[test]
+    fn lo_caducado_es_perdida() {
+        use crate::lotes::Origen;
+        use crate::lotes::tests::{en_dias, farmacia, lote};
+
+        let mut t = Tienda::nueva();
+        farmacia(&mut t.bd);
+        let medicinas = t.bd.crear_familia(&DatosFamilia { nombre: "Medicinas".into(), alerta_stock: None }).unwrap();
+        let jarabe = DatosProducto { familia_id: Some(medicinas.id), ..datos("JRB", "Jarabe", "60", "25") };
+        let jarabe = t.bd.crear_producto(&jarabe).unwrap();
+        let viejo = t.bd.agregar_lote(jarabe.id, &lote("V1", en_dias(-3)), c("4"), Origen::Entrada, "").unwrap();
+        let otro = t.bd.agregar_lote(jarabe.id, &lote("V2", en_dias(-1)), c("1"), Origen::Entrada, "").unwrap();
+
+        let hoy = crate::ahora().date();
+        let filtro = Filtro { desde: hoy, hasta: hoy, cajero_id: None, cliente_id: None };
+        let admin = t.bd.usuario(1).unwrap();
+        let sin_perdidas = t.bd.reporte_para(&admin, &filtro).unwrap();
+        assert!(sin_perdidas.apartados.iter().all(|a| a.seccion != Seccion::Caducados));
+
+        // Sin ventas: solo la pérdida, y la utilidad queda negativa.
+        t.bd.retirar_lote(viejo.id).unwrap();
+        t.bd.retirar_lote(otro.id).unwrap();
+        let reporte = t.bd.reporte_para(&admin, &filtro).unwrap();
+        let r = &reporte.resumen;
+        assert_eq!((r.total, r.costo, r.caducado, r.utilidad, r.margen), (d("0"), d("0"), d("125"), d("-125"), None));
+        fn apartado(reporte: &Reporte, s: Seccion) -> Vec<(&str, String)> {
+            reporte.apartados.iter().find(|a| a.seccion == s).map(|a| filas(&a.filas)).unwrap_or_default()
+        }
+        assert_eq!(
+            apartado(&reporte, Seccion::Caducados),
+            [("Jarabe · lote V1", "-100.00".into()), ("Jarabe · lote V2", "-25.00".into())]
+        );
+
+        // Con ventas, la pérdida se descuenta de la utilidad y de la ganancia de su familia.
+        t.vender(&[(&t.martillo.clone(), "1")]); // 116 − 70
+        let reporte = t.bd.reporte_para(&admin, &filtro).unwrap();
+        assert_eq!((reporte.resumen.utilidad, reporte.resumen.caducado), (d("-79"), d("125")));
+        assert_eq!(
+            apartado(&reporte, Seccion::Ganancia),
+            [("Sin familia", "46.00".into()), ("Medicinas", "-125.00".into())]
+        );
+
+        // Un cambio de costo posterior no cambia la pérdida.
+        t.bd.actualizar_producto(jarabe.id, &DatosProducto { costo: d("40"), ..datos("JRB", "Jarabe", "60", "40") })
+            .unwrap();
+        assert_eq!(t.bd.reporte(&filtro, &[]).unwrap().resumen.caducado, d("125"));
+
+        // No es de ningún cajero, y un cajero no la ve.
+        let de_carla = Filtro { cajero_id: Some(t.cajera), ..filtro };
+        assert_eq!(t.bd.reporte(&de_carla, &[]).unwrap().resumen.caducado, d("0"));
+        let carla = t.bd.usuario(t.cajera).unwrap();
+        let carla = Usuario { permisos: Permisos { ver_reportes: true, ..Default::default() }, ..carla };
+        let suyo = t.bd.reporte_para(&carla, &filtro).unwrap();
+        assert_eq!(suyo.resumen.caducado, d("0"));
+        assert!(suyo.apartados.iter().all(|a| a.seccion != Seccion::Caducados));
+    }
+
+    #[test]
     fn un_cajero_solo_ve_sus_ventas_y_sin_costos() {
         let mut t = Tienda::nueva();
         t.vender(&[(&t.martillo.clone(), "1")]); // Carla: 116
@@ -426,7 +523,8 @@ mod tests {
 
         let todo = t.bd.reporte_para(&admin, &filtro).unwrap();
         assert!(todo.con_costos);
-        assert_eq!((todo.resumen.total, todo.apartados.len()), (d("121"), Seccion::TODOS.len()));
+        // Todo menos la pérdida por caducidad, que solo aparece si hubo.
+        assert_eq!((todo.resumen.total, todo.apartados.len()), (d("121"), Seccion::TODOS.len() - 1));
 
         let carla = t.bd.usuario(t.cajera).unwrap();
         assert!(matches!(t.bd.reporte_para(&carla, &filtro), Err(Error::SinPermiso)));

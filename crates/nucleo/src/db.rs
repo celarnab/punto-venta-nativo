@@ -9,10 +9,11 @@ use crate::texto::normalizar;
 use crate::{Error, Resultado};
 
 /// El esquema crece solo con migraciones nuevas: una vez que una base la aplicó, una migración ya no se toca.
-const PASOS: [&str; 3] = [
+const PASOS: [&str; 4] = [
     include_str!("../migraciones/001_inicial.sql"),
     include_str!("../migraciones/002_codigo_barras.sql"),
     include_str!("../migraciones/003_permisos.sql"),
+    include_str!("../migraciones/004_farmacia.sql"),
 ];
 
 /// Tablas que toda base de esta app tiene; sirven para reconocer un archivo antes de restaurarlo.
@@ -126,6 +127,39 @@ mod tests {
     #[test]
     fn las_migraciones_son_validas() {
         migraciones().validate().unwrap();
+    }
+
+    #[test]
+    fn una_base_de_antes_de_los_lotes_se_pone_al_dia() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        migraciones().to_version(&mut conn, 3).unwrap();
+        conn.execute_batch(
+            "INSERT INTO usuarios (id, nombre, rol, pin_hash) VALUES (1, 'Admin', 'administrador', 'x');
+             INSERT INTO cajas (id, abrio_id) VALUES (1, 1);
+             INSERT INTO productos (id, codigo, nombre, precio, costo, existencia) VALUES (1, 'A', 'Aspirina', 100, 50, 9000);
+             INSERT INTO movimientos (id, producto_id, tipo, cantidad) VALUES (7, 1, 'venta', -1000);
+             INSERT INTO ventas (id, folio, estado, cajero_id, caja_id, total, pagada_en)
+                 VALUES (1, 1, 'pagada', 1, 1, 200, '2026-10-01 10:00:00');
+             INSERT INTO partidas (id, venta_id, producto_id, descripcion, unidad, cantidad, precio, costo, importe)
+                 VALUES (5, 1, 1, 'Aspirina', 'pza', 2000, 100, 50, 200);
+             INSERT INTO devoluciones (id, venta_id, cajero_id, caja_id, autorizo_id, metodo, reembolso)
+                 VALUES (1, 1, 1, 1, 1, 'efectivo', 100);
+             INSERT INTO partidas_devueltas (devolucion_id, partida_id, cantidad, importe) VALUES (1, 5, 1000, 100);",
+        )
+        .unwrap();
+
+        let bd = Bd::preparar(conn).unwrap();
+        let venta = bd.venta(1).unwrap();
+        assert_eq!(
+            (venta.partidas[0].id, venta.partidas[0].devuelto, venta.partidas[0].lote_id),
+            (5, crate::Cantidad::UNO, None)
+        );
+        assert_eq!(bd.movimientos(1, 10).unwrap()[0].id, 7);
+        assert_eq!(bd.negocio().unwrap().giro, crate::negocio::Giro::Abarrotes);
+        let rotas: i64 =
+            bd.conn().query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |f| f.get(0)).unwrap();
+        assert_eq!(rotas, 0);
     }
 
     #[test]

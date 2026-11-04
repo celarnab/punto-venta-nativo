@@ -111,7 +111,15 @@ impl Bd {
                     "INSERT INTO partidas_devueltas (devolucion_id, partida_id, cantidad, importe) VALUES (?1, ?2, ?3, ?4)",
                     params![id, partida.id, cantidad, cantidad * partida.precio],
                 )?;
-                catalogo::mover(tx, partida.producto_id, cantidad, TipoMovimiento::Devolucion, &referencia)?;
+                catalogo::mover_en(
+                    tx,
+                    partida.producto_id,
+                    partida.lote_id,
+                    cantidad,
+                    TipoMovimiento::Devolucion,
+                    &referencia,
+                    None,
+                )?;
             }
             cargar(tx, id)
         })

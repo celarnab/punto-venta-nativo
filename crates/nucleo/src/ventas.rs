@@ -7,9 +7,9 @@ use serde::Serialize;
 
 use crate::catalogo::{self, TipoMovimiento};
 use crate::cobro::{Aplicado, Cobro, repartir};
-use crate::negocio::{Negocio, tasa_iva};
+use crate::negocio::{Negocio, es_farmacia, tasa_iva};
 use crate::usuarios::Autorizacion;
-use crate::{Bd, Cantidad, Dinero, Error, Porcentaje, Resultado, ahora, caja};
+use crate::{Bd, Cantidad, Dinero, Error, Porcentaje, Resultado, ahora, caja, lotes};
 
 enum_texto! {
     pub enum Estado {
@@ -39,6 +39,12 @@ pub struct Partida {
     pub devuelto: Cantidad,
     /// Un precio de mayoreo que la cantidad ya alcanza y que no es el que lleva (solo en ventas abiertas).
     pub sugerencia: Option<Sugerencia>,
+    /// El lote del que sale (farmacias).
+    pub lote_id: Option<i64>,
+    pub lote: Option<String>,
+    pub caducidad: Option<NaiveDate>,
+    /// En una farmacia, el producto tiene lotes y la partida no lleva ninguno (solo en ventas abiertas).
+    pub pide_lote: bool,
 }
 
 /// Precio que se le sugiere al cajero; él decide si lo usa.
@@ -68,6 +74,10 @@ impl Partida {
             importe: fila.get("importe")?,
             devuelto: fila.get("devuelto")?,
             sugerencia: None,
+            lote_id: fila.get("lote_id")?,
+            lote: fila.get("lote")?,
+            caducidad: fila.get("caducidad")?,
+            pide_lote: false,
         })
     }
 }
@@ -195,16 +205,22 @@ impl Bd {
         cantidad: Cantidad,
         precio_elegido: Option<i64>,
     ) -> Resultado<Venta> {
+        self.agregar_de_lote(venta_id, producto_id, None, cantidad, precio_elegido)
+    }
+
+    /// Como [`Bd::agregar`], del lote `lote_id` (farmacias): cada lote del producto va en su propia partida.
+    pub fn agregar_de_lote(
+        &mut self,
+        venta_id: i64,
+        producto_id: i64,
+        lote_id: Option<i64>,
+        cantidad: Cantidad,
+        precio_elegido: Option<i64>,
+    ) -> Resultado<Venta> {
         self.editar(venta_id, |tx| {
-            let actual: Option<Cantidad> = tx
-                .query_row(
-                    "SELECT cantidad FROM partidas WHERE venta_id = ?1 AND producto_id = ?2",
-                    [venta_id, producto_id],
-                    |f| f.get(0),
-                )
-                .optional()?;
+            let actual = cantidad_en(tx, venta_id, producto_id, lote_id)?;
             let nueva = actual.unwrap_or_default() + cantidad;
-            let partida_id = poner_cantidad(tx, venta_id, producto_id, nueva)?;
+            let partida_id = poner_cantidad(tx, venta_id, producto_id, lote_id, nueva)?;
             if let (Some(partida_id), Some(precio_id)) = (partida_id, precio_elegido) {
                 let precio = otro_precio(&catalogo::cargar(tx, producto_id)?, precio_id)?;
                 fijar_precio(tx, partida_id, precio, nueva)?;
@@ -216,7 +232,30 @@ impl Bd {
     pub fn cambiar_cantidad(&mut self, venta_id: i64, partida_id: i64, cantidad: Cantidad) -> Resultado<Venta> {
         self.editar(venta_id, |tx| {
             let partida = partida(tx, venta_id, partida_id)?;
-            poner_cantidad(tx, venta_id, partida.producto_id, cantidad).map(drop)
+            poner_cantidad(tx, venta_id, partida.producto_id, partida.lote_id, cantidad).map(drop)
+        })
+    }
+
+    /// Cambia el lote de una partida (`None` = sin lote). Si la venta ya lleva ese lote del producto, se juntan.
+    pub fn elegir_lote(&mut self, venta_id: i64, partida_id: i64, lote_id: Option<i64>) -> Resultado<Venta> {
+        self.editar(venta_id, |tx| {
+            let partida = partida(tx, venta_id, partida_id)?;
+            if partida.lote_id == lote_id {
+                return Ok(());
+            }
+            match cantidad_en(tx, venta_id, partida.producto_id, lote_id)? {
+                Some(ya) => {
+                    poner_cantidad(tx, venta_id, partida.producto_id, lote_id, ya + partida.cantidad)?;
+                    tx.execute("DELETE FROM partidas WHERE id = ?1", [partida_id])?;
+                }
+                None => {
+                    if let Some(lote_id) = lote_id {
+                        lotes::revisar_venta(tx, partida.producto_id, lote_id, partida.cantidad)?;
+                    }
+                    tx.execute("UPDATE partidas SET lote_id = ?2 WHERE id = ?1", params![partida_id, lote_id])?;
+                }
+            }
+            Ok(())
         })
     }
 
@@ -310,6 +349,9 @@ impl Bd {
                 venta.partidas.iter().filter(|p| p.bajo_costo()).map(|p| p.descripcion.clone()).collect();
             if !perdidas.is_empty() && autorizacion.is_none() {
                 return Err(Error::BajoCosto(perdidas));
+            }
+            if es_farmacia(tx)? {
+                revisar_lotes(tx, &venta)?;
             }
             let caja_id = caja::abierta(tx)?.ok_or(Error::invalido("Abre la caja antes de cobrar."))?;
             let aplicados = repartir(cobros, venta.totales.total)?; // valida antes de tocar nada
@@ -425,14 +467,15 @@ fn en_estado(actual: Estado, esperado: Estado) -> Resultado<()> {
 
 struct PartidaEnVenta {
     producto_id: i64,
+    lote_id: Option<i64>,
     cantidad: Cantidad,
 }
 
 fn partida(conn: &Connection, venta_id: i64, partida_id: i64) -> Resultado<PartidaEnVenta> {
     conn.query_row(
-        "SELECT producto_id, cantidad FROM partidas WHERE venta_id = ?1 AND id = ?2",
+        "SELECT producto_id, lote_id, cantidad FROM partidas WHERE venta_id = ?1 AND id = ?2",
         [venta_id, partida_id],
-        |f| Ok(PartidaEnVenta { producto_id: f.get(0)?, cantidad: f.get(1)? }),
+        |f| Ok(PartidaEnVenta { producto_id: f.get(0)?, lote_id: f.get(1)?, cantidad: f.get(2)? }),
     )
     .optional()?
     .ok_or(Error::NoEncontrado("Producto en la venta"))
@@ -450,50 +493,88 @@ pub(crate) fn cantidad_de_partidas(conn: &Connection, venta_id: i64) -> Resultad
     Ok(conn.query_row("SELECT count(*) FROM partidas WHERE venta_id = ?1", [venta_id], |f| f.get(0))?)
 }
 
-/// Deja la partida con `cantidad`; el precio sigue a la cantidad (mayoreo) salvo que se haya fijado a mano.
-/// Devuelve el id de la partida, o `None` si quedó en cero y se quitó.
+/// La cantidad que la venta ya lleva del producto, de ese lote (o sin lote).
+pub(crate) fn cantidad_en(
+    conn: &Connection,
+    venta_id: i64,
+    producto_id: i64,
+    lote_id: Option<i64>,
+) -> Resultado<Option<Cantidad>> {
+    Ok(conn
+        .query_row(
+            "SELECT cantidad FROM partidas WHERE venta_id = ?1 AND producto_id = ?2 AND lote_id IS ?3",
+            params![venta_id, producto_id, lote_id],
+            |f| f.get(0),
+        )
+        .optional()?)
+}
+
+/// Deja la partida (del producto y lote) con `cantidad`; el precio sigue a la cantidad (mayoreo) salvo que se haya
+/// fijado a mano. Devuelve el id de la partida, o `None` si quedó en cero y se quitó.
 pub(crate) fn poner_cantidad(
     conn: &Connection,
     venta_id: i64,
     producto_id: i64,
+    lote_id: Option<i64>,
     cantidad: Cantidad,
 ) -> Resultado<Option<i64>> {
     if !cantidad.es_positivo() {
-        conn.execute("DELETE FROM partidas WHERE venta_id = ?1 AND producto_id = ?2", [venta_id, producto_id])?;
+        conn.execute(
+            "DELETE FROM partidas WHERE venta_id = ?1 AND producto_id = ?2 AND lote_id IS ?3",
+            params![venta_id, producto_id, lote_id],
+        )?;
         return Ok(None);
     }
     let producto = catalogo::cargar(conn, producto_id)?;
     if !producto.activo {
         return Err(Error::invalido(format!("{} está desactivado.", producto.nombre)));
     }
+    if let Some(lote_id) = lote_id {
+        lotes::revisar_venta(conn, producto_id, lote_id, cantidad)?;
+    }
     // El precio no cambia solo con la cantidad: es el que ya llevaba, o el normal si es nueva.
-    let anterior: Option<Dinero> = conn
+    let anterior: Option<(i64, Dinero)> = conn
         .query_row(
-            "SELECT precio FROM partidas WHERE venta_id = ?1 AND producto_id = ?2",
-            [venta_id, producto_id],
-            |f| f.get(0),
+            "SELECT id, precio FROM partidas WHERE venta_id = ?1 AND producto_id = ?2 AND lote_id IS ?3",
+            params![venta_id, producto_id, lote_id],
+            |f| Ok((f.get(0)?, f.get(1)?)),
         )
         .optional()?;
-    let precio = anterior.unwrap_or(producto.precio);
-    let id = conn.query_row(
-        "INSERT INTO partidas (venta_id, producto_id, descripcion, unidad, cantidad, precio, costo, importe)
-         VALUES (:venta_id, :producto_id, :descripcion, :unidad, :cantidad, :precio, :costo, :importe)
-         ON CONFLICT (venta_id, producto_id)
-         DO UPDATE SET cantidad = excluded.cantidad, precio = excluded.precio, importe = excluded.importe
-         RETURNING id",
+    if let Some((id, precio)) = anterior {
+        conn.execute(
+            "UPDATE partidas SET cantidad = ?2, importe = ?3 WHERE id = ?1",
+            params![id, cantidad, cantidad * precio],
+        )?;
+        return Ok(Some(id));
+    }
+    conn.execute(
+        "INSERT INTO partidas (venta_id, producto_id, lote_id, descripcion, unidad, cantidad, precio, costo, importe)
+         VALUES (:venta_id, :producto_id, :lote_id, :descripcion, :unidad, :cantidad, :precio, :costo, :importe)",
         named_params! {
             ":venta_id": venta_id,
             ":producto_id": producto_id,
+            ":lote_id": lote_id,
             ":descripcion": producto.nombre,
             ":unidad": producto.unidad,
             ":cantidad": cantidad,
-            ":precio": precio,
+            ":precio": producto.precio,
             ":costo": producto.costo,
-            ":importe": cantidad * precio,
+            ":importe": cantidad * producto.precio,
         },
-        |f| f.get(0),
     )?;
-    Ok(Some(id))
+    Ok(Some(conn.last_insert_rowid()))
+}
+
+/// Al cobrar en una farmacia: ningún lote caducó ni se acabó mientras tanto (otra venta pudo usarlo), y lo que va
+/// sin lote cabe en la existencia sin lote.
+fn revisar_lotes(conn: &Connection, venta: &Venta) -> Resultado<()> {
+    for partida in &venta.partidas {
+        match partida.lote_id {
+            Some(lote_id) => lotes::revisar_venta(conn, partida.producto_id, lote_id, partida.cantidad)?,
+            None => lotes::revisar_sin_lote(conn, partida.producto_id, partida.cantidad)?,
+        }
+    }
+    Ok(())
 }
 
 fn otro_precio(producto: &catalogo::Producto, precio_id: i64) -> Resultado<Dinero> {
@@ -524,7 +605,7 @@ fn mover_inventario(
 ) -> Resultado<()> {
     for partida in &venta.partidas {
         let cantidad = Cantidad::crudo(signo * partida.cantidad.como_crudo());
-        catalogo::mover(conn, partida.producto_id, cantidad, tipo, referencia)?;
+        catalogo::mover_en(conn, partida.producto_id, partida.lote_id, cantidad, tipo, referencia, None)?;
     }
     Ok(())
 }
@@ -542,15 +623,19 @@ pub(crate) fn cargar(conn: &Connection, id: i64) -> Resultado<Venta> {
         .ok_or(Error::NoEncontrado("Venta"))?;
 
     let mut partidas = conn.prepare_cached(
-        "SELECT pa.*, p.codigo,
+        "SELECT pa.*, p.codigo, l.numero AS lote, l.caducidad,
                 (SELECT coalesce(sum(pd.cantidad), 0) FROM partidas_devueltas pd WHERE pd.partida_id = pa.id) AS devuelto
-         FROM partidas pa JOIN productos p ON p.id = pa.producto_id
+         FROM partidas pa JOIN productos p ON p.id = pa.producto_id LEFT JOIN lotes l ON l.id = pa.lote_id
          WHERE pa.venta_id = ?1 ORDER BY pa.id",
     )?;
     venta.partidas = partidas.query_map([id], Partida::de_fila)?.collect::<rusqlite::Result<_>>()?;
     if venta.estado == Estado::Abierta {
+        let farmacia = es_farmacia(conn)?;
         for partida in &mut venta.partidas {
             partida.sugerencia = sugerencia(conn, partida)?;
+            partida.pide_lote = farmacia
+                && partida.lote_id.is_none()
+                && lotes::revisar_sin_lote(conn, partida.producto_id, partida.cantidad).is_err();
         }
     }
 
@@ -635,7 +720,15 @@ pub(crate) mod tests {
             self.bd.cobrar(venta.id, &Self::efectivo(&total.to_string()), None).unwrap()
         }
 
-        fn existencia(&self, producto: &Producto) -> Cantidad {
+        /// Vende y cobra en efectivo exacto, del lote `lote`.
+        pub(crate) fn vender_de_lote(&mut self, producto: &Producto, lote: i64, cantidad: &str) -> Venta {
+            let venta = self.bd.venta_en_curso(self.cajera).unwrap();
+            self.bd.agregar_de_lote(venta.id, producto.id, Some(lote), c(cantidad), None).unwrap();
+            let total = self.bd.venta(venta.id).unwrap().totales.total;
+            self.bd.cobrar(venta.id, &Self::efectivo(&total.to_string()), None).unwrap()
+        }
+
+        pub(crate) fn existencia(&self, producto: &Producto) -> Cantidad {
             self.bd.producto(producto.id).unwrap().existencia
         }
     }
@@ -860,6 +953,130 @@ pub(crate) mod tests {
         assert_eq!(corte.diferencia, Some(d("-8")));
         assert!(t.bd.caja_abierta().unwrap().is_none());
         assert!(t.bd.cerrar_caja(caja.id, t.cajera, d("1")).is_err());
+    }
+
+    mod farmacia {
+        use super::*;
+        use crate::devoluciones::ADevolver;
+        use crate::lotes::Origen;
+        use crate::lotes::tests::{en_dias, farmacia, lote};
+
+        /// Una farmacia con Paracetamol en dos lotes: A (10, caduca primero) y B (5).
+        fn con_lotes() -> (Tienda, Producto, i64, i64) {
+            let mut t = Tienda::nueva();
+            farmacia(&mut t.bd);
+            let p = t.bd.crear_producto(&datos("PAR", "Paracetamol", "35", "12")).unwrap();
+            let a = t.bd.agregar_lote(p.id, &lote("A", en_dias(30)), c("10"), Origen::Entrada, "").unwrap().id;
+            let b = t.bd.agregar_lote(p.id, &lote("B", en_dias(300)), c("5"), Origen::Entrada, "").unwrap().id;
+            (t, p, a, b)
+        }
+
+        fn existencia_lote(t: &Tienda, lote: i64) -> Cantidad {
+            t.bd.lote(lote).unwrap().existencia
+        }
+
+        #[test]
+        fn cada_lote_en_su_partida_y_cada_uno_baja() {
+            let (mut t, p, a, b) = con_lotes();
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            t.bd.agregar_de_lote(id, p.id, Some(a), c("2"), None).unwrap();
+            t.bd.agregar_de_lote(id, p.id, Some(b), c("1"), None).unwrap();
+            let venta = t.bd.agregar_de_lote(id, p.id, Some(a), c("1"), None).unwrap();
+            let lineas: Vec<_> = venta.partidas.iter().map(|l| (l.lote.clone().unwrap(), l.cantidad)).collect();
+            assert_eq!(lineas, [("A".to_string(), c("3")), ("B".to_string(), c("1"))]);
+            assert_eq!(venta.partidas[0].caducidad, Some(en_dias(30)));
+
+            let partida_b = venta.partidas[1].id;
+            assert_eq!(t.bd.cambiar_cantidad(id, partida_b, c("2")).unwrap().partidas[1].cantidad, c("2"));
+            t.bd.cobrar(id, &Tienda::efectivo("175"), None).unwrap();
+            assert_eq!((existencia_lote(&t, a), existencia_lote(&t, b)), (c("7"), c("3")));
+            assert_eq!(t.existencia(&p), c("10"));
+        }
+
+        #[test]
+        fn no_vende_de_mas_ni_caducado() {
+            let (mut t, p, a, _) = con_lotes();
+            let viejo = t.bd.agregar_lote(p.id, &lote("V", en_dias(-1)), c("3"), Origen::Entrada, "").unwrap().id;
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            let caducado = t.bd.agregar_de_lote(id, p.id, Some(viejo), c("1"), None).unwrap_err();
+            assert!(caducado.to_string().contains("caducó"), "{caducado}");
+            let de_mas = t.bd.agregar_de_lote(id, p.id, Some(a), c("11"), None).unwrap_err();
+            assert_eq!(de_mas.to_string(), "Del lote A de Paracetamol solo quedan 10 pza.");
+            let ajeno = t.bd.agregar_de_lote(id, t.martillo.id, Some(a), c("1"), None);
+            assert!(matches!(ajeno, Err(Error::NoEncontrado(_))));
+
+            // Otra venta se lleva el lote mientras esta espera: al cobrar ya no alcanza.
+            t.bd.agregar_de_lote(id, p.id, Some(a), c("8"), None).unwrap();
+            t.bd.pausar(id, "").unwrap();
+            t.vender_de_lote(&p, a, "5");
+            t.bd.retomar(id, t.cajera).unwrap();
+            let error = t.bd.cobrar(id, &Tienda::efectivo("280"), None).unwrap_err();
+            assert_eq!(error.to_string(), "Del lote A de Paracetamol solo quedan 5 pza.");
+            assert_eq!(existencia_lote(&t, a), c("5"));
+        }
+
+        #[test]
+        fn sin_lote_solo_lo_que_hay_sin_lote() {
+            let (mut t, p, a, _) = con_lotes();
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            t.bd.agregar(id, p.id, c("1"), None).unwrap();
+            let error = t.bd.cobrar(id, &Tienda::efectivo("35"), None).unwrap_err();
+            assert_eq!(error.to_string(), "Elige el lote de Paracetamol.");
+
+            t.bd.registrar_entrada(p.id, c("2"), "Sin lote").unwrap();
+            let venta = t.bd.agregar(id, p.id, c("2"), None).unwrap();
+            assert!(t.bd.cobrar(id, &Tienda::efectivo("105"), None).unwrap_err().to_string().contains("solo hay 2"));
+
+            // Elegir el lote de la partida; si ya había una de ese lote, se juntan.
+            let partida = venta.partidas[0].id;
+            let venta = t.bd.elegir_lote(id, partida, Some(a)).unwrap();
+            assert_eq!(venta.partidas[0].lote_id, Some(a));
+            t.bd.agregar(id, p.id, c("1"), None).unwrap();
+            let suelta = t.bd.venta(id).unwrap().partidas[1].id;
+            let venta = t.bd.elegir_lote(id, suelta, Some(a)).unwrap();
+            assert_eq!((venta.partidas.len(), venta.partidas[0].cantidad), (1, c("4")));
+            t.bd.cobrar(id, &Tienda::efectivo("140"), None).unwrap();
+            assert_eq!((existencia_lote(&t, a), t.bd.existencia_sin_lote(p.id).unwrap()), (c("6"), c("2")));
+        }
+
+        #[test]
+        fn cancelar_y_devolver_regresan_al_lote() {
+            let (mut t, p, a, b) = con_lotes();
+            let venta = t.vender_de_lote(&p, a, "4");
+            let permiso = t.bd.autorizar("1111").unwrap();
+            t.bd.cancelar(venta.id, permiso).unwrap();
+            assert_eq!(existencia_lote(&t, a), c("10"));
+
+            let venta = t.vender_de_lote(&p, b, "5");
+            assert!(t.bd.lotes(p.id).unwrap().iter().all(|l| l.id != b)); // agotado: ya no se ofrece
+            let dos = ADevolver { partida_id: venta.partidas[0].id, cantidad: c("2") };
+            t.bd.devolver(venta.id, t.cajera, &[dos], Metodo::Efectivo, "", permiso).unwrap();
+            assert_eq!(existencia_lote(&t, b), c("2"));
+            assert_eq!(t.existencia(&p), c("12"));
+        }
+
+        #[test]
+        fn fuera_de_farmacia_se_vende_como_siempre() {
+            let (mut t, p, _, _) = con_lotes();
+            let negocio = t.bd.negocio().unwrap();
+            t.bd.guardar_negocio(&Negocio { giro: crate::negocio::Giro::Ferreteria, ..negocio }).unwrap();
+            t.vender(&[(&p, "3")]);
+            assert_eq!(t.existencia(&p), c("12"));
+        }
+
+        #[test]
+        fn la_cotizacion_conserva_el_lote_si_alcanza() {
+            let (mut t, p, a, b) = con_lotes();
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            t.bd.agregar_de_lote(id, p.id, Some(a), c("3"), None).unwrap();
+            t.bd.agregar_de_lote(id, p.id, Some(b), c("4"), None).unwrap();
+            let cotizacion = t.bd.cotizar(id, 7, "").unwrap();
+            t.vender_de_lote(&p, b, "2"); // de B ya solo quedan 3
+
+            let venta = t.bd.convertir_cotizacion(cotizacion.id, t.cajera).unwrap();
+            let lineas: Vec<_> = venta.partidas.iter().map(|l| (l.lote_id, l.cantidad)).collect();
+            assert_eq!(lineas, [(Some(a), c("3")), (None, c("4"))]);
+        }
     }
 
     #[test]

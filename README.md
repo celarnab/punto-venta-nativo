@@ -30,6 +30,12 @@ navegador ni web view.
   devoluciones; se exportan a Excel) y **usuarios con PIN** (cajero o administrador).
   - A un cajero se le pueden dar **permisos extra**: ver sus propios reportes (sin costos ni utilidad), manejar
     productos o manejar el inventario (entradas y conteos).
+- **Tipo de negocio** (tienda de abarrotes, ferretería o farmacia), al crearlo o en *Ajustes → Negocio*.
+- **Farmacias: lotes con caducidad**. Cada producto puede tener varios lotes, con su número, fabricación, caducidad
+  y existencia; se agregan al llegar mercancía o se asignan a la que ya había. Al vender se elige el lote (el que
+  caduca primero va arriba; lo caducado o agotado no aparece) y sale en el ticket. Lo caducado se avisa en el menú
+  y se **retira** desde *Productos → Caducidades*: sale del inventario y su costo cuenta como pérdida en los
+  reportes, que puede dejar la utilidad en negativo. El Excel del catálogo trae una hoja «Lotes».
 - **Impresión**: los tickets van **directo a la impresora térmica** en ESC/POS, sin diálogos, y pueden abrir el
   cajón de dinero. Sin impresora térmica salen en PDF. La cotización en hoja carta siempre es PDF.
 - **Respaldos**: uno automático cada día (se conservan 30), manual cuando se quiera, y **restaurar una base completa**

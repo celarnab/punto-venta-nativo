@@ -123,6 +123,27 @@ export component Celda inherits Text {
     overflow: elide;
 }
 
+/// Casilla para palomear renglones. A diferencia del CheckBox, no guarda su estado: lo dice `marcado` y el clic
+/// solo avisa, así que puede seguir a una expresión (p. ej. «todos están palomeados»).
+export component Palomita inherits Rectangle {
+    in property <bool> marcado;
+    callback clic();
+    width: 24px;
+    Rectangle {
+        width: 16px;
+        height: 16px;
+        border-radius: 3px;
+        border-width: 1px;
+        border-color: marcado ? Tema.acento : toque.has-hover ? Tema.texto-2 : Tema.borde;
+        background: marcado ? Tema.acento : Tema.panel;
+        if marcado: Text { text: "✓"; color: white; font-size: 12px; font-weight: 700; }
+    }
+    toque := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clic(); }
+    }
+}
+
 /// Fondo de un renglón de tabla: alterna tonos y se resalta al pasar el mouse o al seleccionarlo.
 export component Renglon inherits Rectangle {
     in property <int> indice;

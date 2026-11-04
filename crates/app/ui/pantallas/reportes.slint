@@ -9,12 +9,13 @@ component Cifra inherits Panel {
     in property <string> valor;
     in property <string> detalle;
     in property <bool> grande;
+    in property <bool> negativo;
     height: 86px;
     VerticalLayout {
         padding: 10px;
         spacing: 2px;
         Text { text: etiqueta; color: Tema.texto-2; font-size: 12px; }
-        Text { text: valor; color: Tema.texto; font-size: grande ? 26px : 20px; font-weight: 700; }
+        Text { text: valor; color: negativo ? Tema.peligro : Tema.texto; font-size: grande ? 26px : 20px; font-weight: 700; }
         if detalle != "": Text { text: detalle; color: Tema.texto-3; font-size: 11px; overflow: elide; }
     }
 }
@@ -35,10 +36,10 @@ component Barras inherits Panel {
                     x: 0;
                     width: parent.width * max(0, f.proporcion);
                     height: 12px;
-                    background: Tema.acento;
+                    background: f.negativo ? Tema.peligro : Tema.acento;
                 }
             }
-            Text { text: f.valor; width: 95px; horizontal-alignment: right; vertical-alignment: center; color: Tema.texto; }
+            Text { text: f.valor; width: 95px; horizontal-alignment: right; vertical-alignment: center; color: f.negativo ? Tema.peligro : Tema.texto; }
         }
     }
 }
@@ -132,7 +133,13 @@ export component Reportes inherits Rectangle {
                     }
                     Cifra { etiqueta: "Ventas"; valor: Api.reporte.ventas; }
                     Cifra { etiqueta: "Ticket promedio"; valor: Api.reporte.promedio; }
-                    if Api.reporte.utilidad != "": Cifra { etiqueta: "Utilidad"; valor: Api.reporte.utilidad; detalle: Api.reporte.margen; }
+                    if Api.reporte.utilidad != "": Cifra {
+                        etiqueta: "Utilidad";
+                        valor: Api.reporte.utilidad;
+                        negativo: Api.reporte.utilidad-negativa;
+                        detalle: Api.reporte.caducado != "" ? "Ya resta " + Api.reporte.caducado + " de caducados" : Api.reporte.margen;
+                    }
+                    if Api.reporte.caducado != "": Cifra { etiqueta: "Pérdida por caducidad"; valor: "−" + Api.reporte.caducado; negativo: true; }
                 }
                 if Api.reporte.apartados.length > 0: Columnas { apartado: Api.reporte.apartados[0]; }
                 GridLayout {
@@ -148,6 +155,9 @@ export component Reportes inherits Rectangle {
                     Row {
                         if Api.reporte.apartados.length > 5: Barras { apartado: Api.reporte.apartados[5]; }
                         if Api.reporte.apartados.length > 6: Barras { apartado: Api.reporte.apartados[6]; }
+                    }
+                    Row {
+                        if Api.reporte.apartados.length > 7: Barras { apartado: Api.reporte.apartados[7]; }
                     }
                 }
             }

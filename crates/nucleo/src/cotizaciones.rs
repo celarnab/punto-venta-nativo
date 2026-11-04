@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::catalogo;
 use crate::ventas::{self, Estado, Venta};
-use crate::{Bd, Error, Resultado, ahora};
+use crate::{Bd, Error, Resultado, ahora, lotes};
 
 impl Bd {
     /// Guarda la venta en curso como cotización, válida `dias_vigencia` días; el cajero sigue con una venta nueva.
@@ -78,9 +78,15 @@ impl Bd {
                 if catalogo::cargar(tx, p.producto_id).is_err() {
                     continue;
                 }
-                let partida_id = ventas::poner_cantidad(tx, venta_id, p.producto_id, p.cantidad)?;
+                // El lote que se cotizó, si todavía alcanza; si no, sin lote (al cobrar se pide elegirlo).
+                let lote_id = p.lote_id.filter(|&lote| {
+                    let ya = ventas::cantidad_en(tx, venta_id, p.producto_id, Some(lote)).ok().flatten();
+                    lotes::revisar_venta(tx, p.producto_id, lote, ya.unwrap_or_default() + p.cantidad).is_ok()
+                });
+                let ya = ventas::cantidad_en(tx, venta_id, p.producto_id, lote_id)?.unwrap_or_default();
+                let partida_id = ventas::poner_cantidad(tx, venta_id, p.producto_id, lote_id, ya + p.cantidad)?;
                 if let Some(partida_id) = partida_id.filter(|_| respetar_precios) {
-                    ventas::fijar_precio(tx, partida_id, p.precio, p.cantidad)?;
+                    ventas::fijar_precio(tx, partida_id, p.precio, ya + p.cantidad)?;
                 }
             }
             ventas::recalcular(tx, venta_id)?;

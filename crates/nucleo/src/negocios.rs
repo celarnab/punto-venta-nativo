@@ -70,7 +70,11 @@ impl Negocios {
 
     /// La carpeta del negocio, o `None` si no está en la lista.
     pub fn carpeta(&self, id: &str) -> Option<PathBuf> {
-        self.lista.iter().find(|r| r.id == id).map(|r| self.raiz.join(&r.carpeta))
+        // El de la raíz se guarda como ".": sin quitarlo, `create_dir_all("…/.")` falla en una instalación nueva.
+        self.lista.iter().find(|r| r.id == id).map(|r| match r.carpeta.as_path() {
+            p if p == Path::new(".") => self.raiz.clone(),
+            p => self.raiz.join(p),
+        })
     }
 
     /// Lo marca como el que se abre la próxima vez.
@@ -150,6 +154,16 @@ mod tests {
         let nombres: Vec<_> = leidos.lista().iter().map(|r| r.nombre.as_str()).collect();
         assert_eq!(nombres, ["Ferretería Ferremax", "Farmacia Vida Sana"]);
         assert_eq!(leidos.actual().id, "negocio-1");
+    }
+
+    #[test]
+    fn en_una_instalacion_nueva_la_carpeta_se_puede_crear() {
+        let dir = tempfile::tempdir().unwrap();
+        let raiz = dir.path().join("aun-no-existe");
+        let negocios = Negocios::cargar(&raiz);
+        let carpeta = negocios.carpeta(&negocios.actual().id).unwrap();
+        fs::create_dir_all(&carpeta).unwrap();
+        assert!(raiz.is_dir());
     }
 
     #[test]

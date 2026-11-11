@@ -45,6 +45,8 @@ pub struct Partida {
     pub caducidad: Option<NaiveDate>,
     /// En una farmacia, el producto tiene lotes y la partida no lleva ninguno (solo en ventas abiertas).
     pub pide_lote: bool,
+    /// El producto solo se vende con receta (cuenta en farmacias).
+    pub con_receta: bool,
 }
 
 /// Precio que se le sugiere al cajero; él decide si lo usa.
@@ -78,6 +80,7 @@ impl Partida {
             lote: fila.get("lote")?,
             caducidad: fila.get("caducidad")?,
             pide_lote: false,
+            con_receta: fila.get("con_receta")?,
         })
     }
 }
@@ -339,6 +342,18 @@ impl Bd {
     ///
     /// `autorizacion`: un administrador permite vender por debajo del costo, si hace falta.
     pub fn cobrar(&mut self, venta_id: i64, cobros: &[Cobro], autorizacion: Option<Autorizacion>) -> Resultado<Venta> {
+        self.cobrar_con_receta(venta_id, cobros, autorizacion, false)
+    }
+
+    /// Como [`Bd::cobrar`]; en una farmacia, `receta` dice que el cajero confirmó que el cliente presentó una receta
+    /// médica válida. Sin ella no se cobra una venta que lleva productos con receta.
+    pub fn cobrar_con_receta(
+        &mut self,
+        venta_id: i64,
+        cobros: &[Cobro],
+        autorizacion: Option<Autorizacion>,
+        receta: bool,
+    ) -> Resultado<Venta> {
         self.transaccion(|tx| {
             let venta = cargar(tx, venta_id)?;
             venta_en(&venta, Estado::Abierta)?;
@@ -352,6 +367,14 @@ impl Bd {
             }
             if es_farmacia(tx)? {
                 revisar_lotes(tx, &venta)?;
+                let con_receta: Vec<&str> =
+                    venta.partidas.iter().filter(|p| p.con_receta).map(|p| p.descripcion.as_str()).collect();
+                if !con_receta.is_empty() && !receta {
+                    return Err(Error::invalido(format!(
+                        "Se vende solo con receta: {}. Confirma que el cliente presentó una receta médica válida.",
+                        con_receta.join(", ")
+                    )));
+                }
             }
             let caja_id = caja::abierta(tx)?.ok_or(Error::invalido("Abre la caja antes de cobrar."))?;
             let aplicados = repartir(cobros, venta.totales.total)?; // valida antes de tocar nada
@@ -623,7 +646,7 @@ pub(crate) fn cargar(conn: &Connection, id: i64) -> Resultado<Venta> {
         .ok_or(Error::NoEncontrado("Venta"))?;
 
     let mut partidas = conn.prepare_cached(
-        "SELECT pa.*, p.codigo, l.numero AS lote, l.caducidad,
+        "SELECT pa.*, p.codigo, p.con_receta, l.numero AS lote, l.caducidad,
                 (SELECT coalesce(sum(pd.cantidad), 0) FROM partidas_devueltas pd WHERE pd.partida_id = pa.id) AS devuelto
          FROM partidas pa JOIN productos p ON p.id = pa.producto_id LEFT JOIN lotes l ON l.id = pa.lote_id
          WHERE pa.venta_id = ?1 ORDER BY pa.id",
@@ -991,6 +1014,38 @@ pub(crate) mod tests {
             t.bd.cobrar(id, &Tienda::efectivo("175"), None).unwrap();
             assert_eq!((existencia_lote(&t, a), existencia_lote(&t, b)), (c("7"), c("3")));
             assert_eq!(t.existencia(&p), c("10"));
+        }
+
+        #[test]
+        fn lo_que_va_con_receta_pide_confirmarla() {
+            let mut t = Tienda::nueva();
+            farmacia(&mut t.bd);
+            let amoxicilina = DatosProducto { con_receta: true, ..datos("AMX", "Amoxicilina", "89", "38") };
+            let amx = t.bd.crear_producto(&amoxicilina).unwrap();
+            assert!(amx.con_receta);
+            t.bd.registrar_entrada(amx.id, c("5"), "").unwrap();
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            let venta = t.bd.agregar(id, amx.id, c("1"), None).unwrap();
+            assert!(venta.partidas[0].con_receta);
+
+            let sin = t.bd.cobrar(id, &Tienda::efectivo("100"), None).unwrap_err();
+            assert_eq!(
+                sin.to_string(),
+                "Se vende solo con receta: Amoxicilina. Confirma que el cliente presentó una receta médica válida."
+            );
+            assert_eq!(t.existencia(&amx), c("5"));
+            t.bd.cobrar_con_receta(id, &Tienda::efectivo("100"), None, true).unwrap();
+            assert_eq!(t.existencia(&amx), c("4"));
+
+            // Fuera de una farmacia la marca no estorba.
+            t.bd.guardar_negocio(&crate::negocio::Negocio {
+                giro: crate::negocio::Giro::Abarrotes,
+                ..t.bd.negocio().unwrap()
+            })
+            .unwrap();
+            let id = t.bd.venta_en_curso(t.cajera).unwrap().id;
+            t.bd.agregar(id, amx.id, c("1"), None).unwrap();
+            t.bd.cobrar(id, &Tienda::efectivo("100"), None).unwrap();
         }
 
         #[test]

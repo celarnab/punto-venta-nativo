@@ -44,6 +44,7 @@ export struct ProductoUi {
     activo: bool,
     alerta: bool,
     otros-precios: int,
+    con-receta: bool,
     marcado: bool,      // palomeado para borrar varios
 }
 
@@ -89,6 +90,7 @@ export struct PartidaUi {
     sugerencia: string, // «Mayoreo $1.25» si la cantidad ya alcanza otro precio
     lote: string,       // «Lote A1 · cad. 03/2027» (farmacias)
     pide-lote: bool,    // el producto tiene lotes y la partida no lleva ninguno
+    con-receta: bool,   // se vende solo con receta (farmacias)
 }
 
 export struct FilaUi {
@@ -119,6 +121,7 @@ export struct VentaUi {
     con-devolucion: bool,
     se-puede-devolver: bool, // queda algo por devolver
     devoluciones: [FilaUi],
+    con-receta: string,      // los productos que se venden con receta, separados por comas (farmacias)
 }
 
 export struct ClienteUi {
@@ -150,6 +153,7 @@ export struct EditorProductoUi {
     stock-maximo: string,
     alerta: string,
     activo: bool,
+    con-receta: bool,   // farmacias: solo se vende con receta
     existencia: string,
     sin-lote: string,   // existencia que no está en ningún lote (farmacias)
     precios: [PrecioUi],
@@ -251,6 +255,8 @@ export global Api {
     in property <string> negocio-nombre;
     in property <[string]> giros;                // tipos de negocio: abarrotes, ferretería, farmacia
     in property <bool> es-farmacia;              // maneja lotes y caducidades
+    in property <string> ejemplo-busqueda;       // al vender: cómo agregar varios, con productos del tipo de negocio
+    in property <string> ejemplo-cotizacion;     // la nota de una cotización, también según el tipo de negocio
     in property <int> caducados;                 // lotes caducados por retirar
     in property <string> fecha-larga;
     in property <[UsuarioUi]> usuarios-login;
@@ -309,7 +315,7 @@ export global Api {
     callback pausar(string) -> bool;
     callback tirar();
     callback cotizar(string, string) -> bool; // días, nota
-    callback cobrar([CobroUi], string) -> RespuestaUi; // cobros, pin de quien autoriza vender bajo costo
+    callback cobrar([CobroUi], string, bool) -> RespuestaUi; // cobros, pin de quien autoriza vender bajo costo, receta presentada
     callback imprimir-cobrada();
     callback cerrar-cobrada();
 

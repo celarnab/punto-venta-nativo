@@ -1,6 +1,6 @@
 // Cobrar: lo que entrega el cliente en cada forma de pago; el cambio sale del efectivo.
 
-import { Button, LineEdit } from "std-widgets.slint";
+import { Button, CheckBox, LineEdit } from "std-widgets.slint";
 import { Api } from "../api.slint";
 import { Tema, Dialogo, Campo, Nota, PinPad } from "../comunes.slint";
 
@@ -17,6 +17,10 @@ export component Cobro inherits Dialogo {
     property <float> diferencia: recibido - total-numero;
     property <string> error;
     property <string> pide-autorizacion;
+    // Farmacias: lo que se vende con receta pide confirmar que el cliente la presentó.
+    property <bool> pide-receta: Api.es-farmacia && Api.venta.con-receta != "";
+    property <bool> receta;
+    property <bool> se-puede: diferencia >= 0 && (receta || !pide-receta);
     callback cobrada();
 
     function cobrar(pin: string) {
@@ -24,7 +28,7 @@ export component Cobro inherits Dialogo {
             { metodo: 0, monto: efectivo },
             { metodo: 1, monto: tarjeta },
             { metodo: 2, monto: transferencia },
-        ], pin);
+        ], pin, receta);
         if respuesta.ok {
             root.cobrada();
         } else if respuesta.autorizar {
@@ -49,7 +53,7 @@ export component Cobro inherits Dialogo {
             numero: true;
             text <=> root.efectivo;
             init => { self.enfocar(); }
-            accepted => { if diferencia >= 0 { cobrar(""); } }
+            accepted => { if se-puede { cobrar(""); } }
         }
         HorizontalLayout {
             spacing: 6px;
@@ -61,8 +65,8 @@ export component Cobro inherits Dialogo {
         }
         HorizontalLayout {
             spacing: 10px;
-            Campo { etiqueta: "Tarjeta"; numero: true; text <=> root.tarjeta; accepted => { if diferencia >= 0 { cobrar(""); } } }
-            Campo { etiqueta: "Transferencia"; numero: true; text <=> root.transferencia; accepted => { if diferencia >= 0 { cobrar(""); } } }
+            Campo { etiqueta: "Tarjeta"; numero: true; text <=> root.tarjeta; accepted => { if se-puede { cobrar(""); } } }
+            Campo { etiqueta: "Transferencia"; numero: true; text <=> root.transferencia; accepted => { if se-puede { cobrar(""); } } }
         }
         Rectangle {
             height: 44px;
@@ -86,6 +90,21 @@ export component Cobro inherits Dialogo {
                 }
             }
         }
+        if pide-receta: Rectangle {
+            background: receta ? Tema.exito-suave : Tema.aviso-suave;
+            border-radius: 4px;
+            VerticalLayout {
+                padding: 10px;
+                spacing: 6px;
+                Text {
+                    text: "Se vende solo con receta: " + Api.venta.con-receta + ".";
+                    color: receta ? Tema.exito : Tema.aviso;
+                    font-weight: 700;
+                    wrap: word-wrap;
+                }
+                CheckBox { text: "El cliente presentó una receta médica válida"; checked <=> root.receta; }
+            }
+        }
         if error != "": Text { text: error; color: Tema.peligro; wrap: word-wrap; }
         HorizontalLayout {
             spacing: 8px;
@@ -94,7 +113,7 @@ export component Cobro inherits Dialogo {
             Button {
                 text: "Cobrar (Enter)";
                 primary: true;
-                enabled: diferencia >= 0;
+                enabled: se-puede;
                 clicked => { cobrar(""); }
             }
         }

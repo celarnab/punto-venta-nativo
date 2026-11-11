@@ -9,14 +9,19 @@ use crate::negocio::Negocio;
 use crate::reportes::Reporte;
 use crate::ventas::Venta;
 
-/// Mismas columnas que reconoce la importación: se edita en Excel y se vuelve a subir. Si hay `lotes` (farmacia),
-/// van en una segunda hoja, que la importación no lee.
-pub fn productos_a_excel(productos: &[Producto], lotes: &[Lote]) -> Resultado<Vec<u8>> {
+/// Mismas columnas que reconoce la importación: se edita en Excel y se vuelve a subir. En una farmacia
+/// (`farmacia` = sus lotes) lleva además la columna «Con receta», y los lotes van en una segunda hoja, que la
+/// importación no lee.
+pub fn productos_a_excel(productos: &[Producto], farmacia: Option<&[Lote]>) -> Resultado<Vec<u8>> {
     let mut libro = Workbook::new();
     let hoja = libro.add_worksheet().set_name("Productos")?;
-    let titulos =
-        ["Código", "Código de barras", "Nombre", "Familia", "Precio", "Costo", "Existencia", "Unidad", "A granel"];
+    let mut titulos =
+        vec!["Código", "Código de barras", "Nombre", "Familia", "Precio", "Costo", "Existencia", "Unidad", "A granel"];
+    if farmacia.is_some() {
+        titulos.push("Con receta");
+    }
     encabezados(hoja, &titulos)?;
+    let si_no = |b: bool| if b { "Sí" } else { "No" };
     for (fila, p) in (1..).zip(productos) {
         hoja.write_string(fila, 0, &p.codigo)?; // como texto: conserva ceros a la izquierda
         hoja.write_string(fila, 1, p.codigo_barras.as_deref().unwrap_or_default())?;
@@ -26,11 +31,14 @@ pub fn productos_a_excel(productos: &[Producto], lotes: &[Lote]) -> Resultado<Ve
         hoja.write_number_with_format(fila, 5, p.costo.como_f64(), &pesos())?;
         hoja.write_number(fila, 6, p.existencia.como_f64())?;
         hoja.write_string(fila, 7, &p.unidad)?;
-        hoja.write_string(fila, 8, if p.granel { "Sí" } else { "No" })?;
+        hoja.write_string(fila, 8, si_no(p.granel))?;
+        if farmacia.is_some() {
+            hoja.write_string(fila, 9, si_no(p.con_receta))?;
+        }
     }
     hoja.autofit();
 
-    if !lotes.is_empty() {
+    if let Some(lotes) = farmacia.filter(|lotes| !lotes.is_empty()) {
         let hoy = crate::ahora().date();
         let hoja = libro.add_worksheet().set_name("Lotes")?;
         encabezados(hoja, &["Código", "Producto", "Lote", "Fabricación", "Caducidad", "Existencia", "Estado"])?;
@@ -202,9 +210,9 @@ mod tests {
         t.bd.retirar_lote(viejo.unwrap().id).unwrap();
 
         let productos = t.bd.buscar_productos("", false, 100).unwrap();
-        let bytes = productos_a_excel(&productos, &t.bd.todos_los_lotes().unwrap()).unwrap();
+        let bytes = productos_a_excel(&productos, Some(&t.bd.todos_los_lotes().unwrap())).unwrap();
         let hojas = textos(&bytes);
-        for esperado in ["Lotes", "LT-9", "Retirado"] {
+        for esperado in ["Lotes", "LT-9", "Retirado", "Con receta"] {
             assert!(hojas.iter().any(|t| t == esperado), "{esperado}");
         }
 

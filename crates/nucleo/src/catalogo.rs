@@ -60,6 +60,8 @@ pub struct Producto {
     pub granel: bool,
     /// En la que se vende y se cuenta la existencia: «pza», «m», «caja»… o «kg» si es a granel.
     pub unidad: String,
+    /// Farmacias: solo se vende con receta médica.
+    pub con_receta: bool,
     pub precios: Vec<OtroPrecio>,
 }
 
@@ -105,6 +107,7 @@ impl Producto {
             activo: fila.get("activo")?,
             granel: fila.get("granel")?,
             unidad: fila.get("unidad")?,
+            con_receta: fila.get("con_receta")?,
             precios: Vec::new(),
         })
     }
@@ -130,6 +133,9 @@ pub struct DatosProducto {
     /// Vacía = «pza». A granel siempre es «kg».
     #[serde(default)]
     pub unidad: String,
+    /// Farmacias: solo se vende con receta médica.
+    #[serde(default)]
+    pub con_receta: bool,
     #[serde(default)]
     pub precios: Vec<OtroPrecio>,
 }
@@ -204,6 +210,7 @@ impl DatosProducto {
                 ":activo": self.activo,
                 ":granel": self.granel,
                 ":unidad": self.unidad(),
+                ":con_receta": self.con_receta,
             },
         )
         .map_err(duplicado(|| format!("Ya existe un producto con el código {codigo}.")))
@@ -332,9 +339,9 @@ impl Bd {
             datos.guardar(
                 tx,
                 "INSERT INTO productos (id, codigo, codigo_barras, nombre, familia_id, precio, costo, stock_minimo,
-                                        stock_maximo, alerta_stock, activo, granel, unidad)
+                                        stock_maximo, alerta_stock, activo, granel, unidad, con_receta)
                  VALUES (:id, :codigo, :codigo_barras, :nombre, :familia_id, :precio, :costo, :stock_minimo,
-                         :stock_maximo, :alerta_stock, :activo, :granel, :unidad)",
+                         :stock_maximo, :alerta_stock, :activo, :granel, :unidad, :con_receta)",
                 None,
             )?;
             let id = tx.last_insert_rowid();
@@ -351,7 +358,7 @@ impl Bd {
                 "UPDATE productos
                  SET codigo = :codigo, codigo_barras = :codigo_barras, nombre = :nombre, familia_id = :familia_id, precio = :precio, costo = :costo,
                      stock_minimo = :stock_minimo, stock_maximo = :stock_maximo, alerta_stock = :alerta_stock,
-                     activo = :activo, granel = :granel, unidad = :unidad
+                     activo = :activo, granel = :granel, unidad = :unidad, con_receta = :con_receta
                  WHERE id = :id AND borrado_en IS NULL",
                 Some(id),
             )?;

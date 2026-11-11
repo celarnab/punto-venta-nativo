@@ -63,7 +63,7 @@ export component Venta inherits Rectangle {
                 HorizontalLayout {
                     spacing: 8px;
                     buscador := LineEdit {
-                        placeholder-text: "Escanea o escribe código o nombre  (F2)    3*martillo agrega 3 · 0.5*clavo medio kilo";
+                        placeholder-text: "Escanea o escribe código o nombre  (F2)    " + Api.ejemplo-busqueda;
                         font-size: 16px;
                         height: 38px;
                         edited(t) => { Api.buscar(t); }
@@ -113,6 +113,7 @@ export component Venta inherits Rectangle {
                                 HorizontalLayout {
                                     spacing: 6px;
                                     Celda { text: p.descripcion; }
+                                    if Api.es-farmacia && p.con-receta: Insignia { text: "Receta"; tinta: Tema.aviso; fondo: Tema.aviso-suave; y: 9px; }
                                     // Farmacias: de qué lote sale; se cambia con un clic.
                                     if p.lote != "" || p.pide-lote: Rectangle {
                                         width: lote-texto.preferred-width + 12px;
@@ -449,7 +450,7 @@ export component Venta inherits Rectangle {
         cerrar => { cotizando = false; enfocar(); }
         Nota { text: "No se cobra ni se descuenta inventario. Queda en «Cotizaciones» para imprimirla o convertirla en venta."; }
         dias := Campo { etiqueta: "Respetar precios durante (días)"; numero: true; text: "15"; init => { self.enfocar(); } }
-        nota-cotizacion := Campo { etiqueta: "Nota (opcional)"; placeholder: "Obra de la calle 5"; }
+        nota-cotizacion := Campo { etiqueta: "Nota (opcional)"; placeholder: Api.ejemplo-cotizacion; }
         Button {
             text: "Guardar cotización";
             primary: true;

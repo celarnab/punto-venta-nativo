@@ -242,6 +242,7 @@ component EditorProducto inherits Dialogo {
     property <int> familia: Api.editor.familia-indice;
     property <bool> granel: Api.editor.granel;
     property <bool> activo: Api.editor.activo;
+    property <bool> con-receta: Api.editor.con-receta;
     property <bool> nueva-familia;
     property <string> error;
     property <bool> confirmando-borrado;
@@ -288,6 +289,7 @@ component EditorProducto inherits Dialogo {
                     Text { text: "Se vende"; font-size: 12px; color: Tema.texto-2; }
                     CheckBox { text: "A granel, por kilo"; checked <=> granel; }
                     CheckBox { text: "Activo (se puede vender)"; checked <=> activo; }
+                    if Api.es-farmacia: CheckBox { text: "Venta con receta"; checked <=> con-receta; }
                 }
                 unidad := Campo {
                     etiqueta: "Unidad";
@@ -372,6 +374,7 @@ component EditorProducto inherits Dialogo {
                     stock-maximo: maximo.text,
                     alerta: alerta.text,
                     activo: activo,
+                    con-receta: con-receta,
                 });
                 if error == "" { root.cerrar(); }
             }
@@ -567,6 +570,7 @@ export component Productos inherits Rectangle {
                             spacing: 6px;
                             Celda { text: p.nombre; tenue: !p.activo; }
                             if p.otros-precios > 0: Insignia { text: (p.otros-precios + 1) + " precios"; y: 6px; }
+                            if Api.es-farmacia && p.con-receta: Insignia { text: "con receta"; tinta: Tema.aviso; fondo: Tema.aviso-suave; y: 6px; }
                             if !p.activo: Insignia { text: "desactivado"; y: 6px; }
                         }
                         Celda { text: p.familia; width: 130px; }

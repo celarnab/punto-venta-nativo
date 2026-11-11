@@ -84,6 +84,7 @@ pub fn producto(p: &Producto) -> ProductoUi {
         activo: p.activo,
         alerta: p.en_alerta(),
         otros_precios: p.precios.len() as i32,
+        con_receta: p.con_receta,
         marcado: false,
     }
 }
@@ -114,6 +115,7 @@ pub fn partida(p: &Partida, a_devolver: Option<Cantidad>) -> PartidaUi {
             _ => String::new(),
         }),
         pide_lote: p.pide_lote,
+        con_receta: p.con_receta,
     }
 }
 
@@ -167,6 +169,9 @@ pub fn venta(v: &Venta, devoluciones: &[Devolucion], a_devolver: impl Fn(i64) ->
         vencida: v.vigencia.is_some_and(|f| f < hoy()),
         con_devolucion: v.partidas.iter().any(|p| p.devuelto.es_positivo()),
         se_puede_devolver: v.partidas.iter().any(|p| p.devuelto < p.cantidad),
+        con_receta: texto(
+            v.partidas.iter().filter(|p| p.con_receta).map(|p| p.descripcion.as_str()).collect::<Vec<_>>().join(", "),
+        ),
         devoluciones: modelo(devoluciones.iter().map(|d| FilaUi {
             id: d.id as i32,
             etiqueta: texto(format!("{} · {} · {}", fecha_corta(d.creada), d.metodo.etiqueta(), d.motivo)),

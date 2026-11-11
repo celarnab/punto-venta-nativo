@@ -32,6 +32,7 @@ enum Columna {
     Existencia,
     Unidad,
     Granel,
+    ConReceta,
 }
 
 impl Columna {
@@ -71,6 +72,7 @@ impl Columna {
             (&["existencia", "existencias", "stock", "inventario", "cantidad"], Self::Existencia),
             (&["unidad", "unidad de medida", "um"], Self::Unidad),
             (&["a granel", "granel", "venta a granel", "por kilo"], Self::Granel),
+            (&["con receta", "receta", "venta con receta", "requiere receta"], Self::ConReceta),
         ];
         alias.iter().find(|(nombres, _)| nombres.contains(&encabezado.trim())).map(|&(_, columna)| columna)
     }
@@ -90,6 +92,8 @@ pub struct Datos {
     pub unidad: Option<String>,
     /// Se vende por kilo.
     pub granel: Option<bool>,
+    /// Farmacias: solo se vende con receta médica.
+    pub con_receta: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -307,6 +311,7 @@ fn juntar(base: &mut Datos, otro: &Datos) {
     base.familia = base.familia.take().or(otro.familia.clone());
     base.unidad = base.unidad.take().or(otro.unidad.clone());
     base.granel = base.granel.or(otro.granel);
+    base.con_receta = base.con_receta.or(otro.con_receta);
     base.nombre = base.nombre.take().or(otro.nombre.clone());
 }
 
@@ -347,6 +352,7 @@ fn leer_datos<'a>(celda: impl Fn(Columna) -> &'a Data, sin_codigo_propio: bool) 
             .map_err(|e| format!("Existencia: {e}"))?,
         unidad: opcional(Columna::Unidad).map(unidad),
         granel: si_o_no(celda(Columna::Granel)).map_err(|e| format!("A granel: {e}"))?,
+        con_receta: si_o_no(celda(Columna::ConReceta)).map_err(|e| format!("Con receta: {e}"))?,
     })
 }
 
@@ -615,6 +621,7 @@ fn accion(datos: &Datos, existente: Option<&Producto>) -> Accion {
     comparar("Unidad", actual.unidad.clone(), datos.unidad.clone());
     let si_no = |b: bool| if b { "Sí" } else { "No" }.to_string();
     comparar("A granel", si_no(actual.granel), datos.granel.map(si_no));
+    comparar("Con receta", si_no(actual.con_receta), datos.con_receta.map(si_no));
 
     if cambios.is_empty() { Accion::SinCambios } else { Accion::Actualizar { cambios } }
 }
@@ -638,21 +645,22 @@ fn aplicar(conn: &Connection, datos: &Datos) -> Resultado<()> {
         ":costo": datos.costo,
         ":unidad": datos.unidad,
         ":granel": datos.granel,
+        ":con_receta": datos.con_receta,
     };
     let actualizados = conn.execute(
         "UPDATE productos SET codigo_barras = coalesce(:codigo_barras, codigo_barras),
                               nombre = coalesce(:nombre, nombre), familia_id = coalesce(:familia_id, familia_id),
                               precio = coalesce(:precio, precio), costo = coalesce(:costo, costo),
-                              granel = coalesce(:granel, granel),
+                              granel = coalesce(:granel, granel), con_receta = coalesce(:con_receta, con_receta),
                               unidad = CASE WHEN coalesce(:granel, granel) THEN 'kg' ELSE coalesce(:unidad, unidad) END
          WHERE codigo = :codigo AND borrado_en IS NULL",
         parametros,
     )?;
     if actualizados == 0 {
         conn.execute(
-            "INSERT INTO productos (codigo, codigo_barras, nombre, familia_id, precio, costo, granel, unidad)
+            "INSERT INTO productos (codigo, codigo_barras, nombre, familia_id, precio, costo, granel, unidad, con_receta)
              VALUES (:codigo, :codigo_barras, :nombre, :familia_id, :precio, coalesce(:costo, 0), coalesce(:granel, 0),
-                     CASE WHEN :granel THEN 'kg' ELSE coalesce(:unidad, 'pza') END)",
+                     CASE WHEN :granel THEN 'kg' ELSE coalesce(:unidad, 'pza') END, coalesce(:con_receta, 0))",
             parametros,
         )?;
     }
@@ -1027,6 +1035,31 @@ mod tests {
     }
 
     #[test]
+    fn importa_venta_con_receta_sin_borrarla_si_no_viene() {
+        let mut bd = Bd::en_memoria().unwrap();
+        let renglones = tabla(vec![
+            vec![s("Código"), s("Nombre"), s("Precio"), s("Con receta")],
+            vec![s("AMX"), s("Amoxicilina"), Data::Float(89.0), s("Sí")],
+            vec![s("PAR"), s("Paracetamol"), Data::Float(35.0), Data::Empty],
+        ]);
+        assert_eq!(bd.importar(&renglones).unwrap().crear, 2);
+        let receta = |bd: &Bd, codigo: &str| bd.producto_por_codigo(codigo).unwrap().unwrap().con_receta;
+        assert!((receta(&bd, "AMX"), receta(&bd, "PAR")) == (true, false));
+
+        // Se marca uno que ya existía: la vista previa lo dice.
+        let marcar = tabla(vec![vec![s("Código"), s("Receta")], vec![s("PAR"), s("x")]]);
+        let vista = bd.previsualizar_importacion(&marcar).unwrap();
+        assert_eq!(vista.filas[0].accion, Accion::Actualizar { cambios: vec!["Con receta: No → Sí".into()] });
+        bd.importar(&marcar).unwrap();
+        assert!(receta(&bd, "PAR"));
+
+        // Una hoja sin la columna no la toca.
+        let sin_columna = tabla(vec![vec![s("Código"), s("Precio")], vec![s("AMX"), Data::Float(95.0)]]);
+        bd.importar(&sin_columna).unwrap();
+        assert!(receta(&bd, "AMX"));
+    }
+
+    #[test]
     fn importa_venta_a_granel() {
         let mut bd = Bd::en_memoria().unwrap();
         let renglones = tabla(vec![
@@ -1057,12 +1090,21 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let ruta = dir.path().join("productos.xlsx");
-        std::fs::write(&ruta, crate::exportacion::productos_a_excel(&productos, &[]).unwrap()).unwrap();
+        std::fs::write(&ruta, crate::exportacion::productos_a_excel(&productos, None).unwrap()).unwrap();
 
         let renglones = leer_excel(&ruta).unwrap();
         let leido = renglones.iter().find_map(|r| r.datos.as_ref().ok().filter(|d| d.codigo == "007")).unwrap();
         assert_eq!((leido.codigo.as_str(), leido.precio, leido.existencia), ("007", Some(d("116.5")), Some(c("2.5"))));
         assert_eq!(leido.codigo_barras.as_deref(), Some("0750123"));
         assert_eq!(bd.previsualizar_importacion(&renglones).unwrap().sin_cambios, 2);
+
+        // De una farmacia sale también «Con receta», y regresa igual.
+        let jarabe = bd.crear_producto(&DatosProducto { con_receta: true, ..datos("JRB", "Jarabe", "60", "25") });
+        let productos = bd.buscar_productos("", false, 100).unwrap();
+        std::fs::write(&ruta, crate::exportacion::productos_a_excel(&productos, Some(&[])).unwrap()).unwrap();
+        let renglones = leer_excel(&ruta).unwrap();
+        let leido = renglones.iter().find_map(|r| r.datos.as_ref().ok().filter(|d| d.codigo == "JRB")).unwrap();
+        assert_eq!((leido.con_receta, jarabe.unwrap().con_receta), (Some(true), true));
+        assert_eq!(bd.previsualizar_importacion(&renglones).unwrap().sin_cambios, 3);
     }
 }

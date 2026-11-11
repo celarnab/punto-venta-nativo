@@ -9,11 +9,12 @@ use crate::texto::normalizar;
 use crate::{Error, Resultado};
 
 /// El esquema crece solo con migraciones nuevas: una vez que una base la aplicó, una migración ya no se toca.
-const PASOS: [&str; 4] = [
+const PASOS: [&str; 5] = [
     include_str!("../migraciones/001_inicial.sql"),
     include_str!("../migraciones/002_codigo_barras.sql"),
     include_str!("../migraciones/003_permisos.sql"),
     include_str!("../migraciones/004_farmacia.sql"),
+    include_str!("../migraciones/005_receta.sql"),
 ];
 
 /// Tablas que toda base de esta app tiene; sirven para reconocer un archivo antes de restaurarlo.

@@ -71,7 +71,7 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     foto("05-peso")?;
     api.invoke_cancelar_pendiente();
     let cobro = [CobroUi { metodo: 0, monto: "1000".into() }];
-    let respuesta = api.invoke_cobrar(slint::ModelRc::new(slint::VecModel::from(cobro.to_vec())), "".into());
+    let respuesta = api.invoke_cobrar(slint::ModelRc::new(slint::VecModel::from(cobro.to_vec())), "".into(), false);
     assert!(respuesta.ok, "no se pudo cobrar: {}", respuesta.mensaje);
     foto("05b-cobrada")?;
     api.invoke_cerrar_cobrada();
@@ -151,6 +151,9 @@ pub fn ejecutar(carpeta: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let sin_lote = api.get_opciones_lote().iter().find(|o| o.id == 0).map_or(0, |o| o.id);
     api.invoke_elegir_lote(sin_lote); // solo hay 3 sin lote: la partida pide elegir lote
     foto("23-farmacia-venta")?;
+    clic(&app, 1205.0, 642.0); // «Cobrar»
+    foto("23b-farmacia-cobro-receta")?;
+    escribir(&app, &char::from(slint::platform::Key::Escape).to_string());
     api.set_pantalla("productos".into());
     api.invoke_editar_producto(ids_farmacia.paracetamol as i32);
     foto("24-farmacia-editor")?;
@@ -233,6 +236,7 @@ fn ejemplo() -> nucleo::Resultado<(Bd, Ids)> {
     negocio.nombre = "Ferretería La Tuerca".into();
     negocio.direccion = "Av. Juárez 123, Centro".into();
     negocio.telefono = "555 123 4567".into();
+    negocio.giro = nucleo::negocio::Giro::Ferreteria;
     bd.guardar_negocio(&negocio)?;
 
     let vianet = bd.crear_usuario(
@@ -380,7 +384,10 @@ fn ejemplo_farmacia() -> nucleo::Resultado<(Bd, IdsFarmacia)> {
         ..Default::default()
     };
     let paracetamol = bd.crear_producto(&producto("PAR-500", "Paracetamol 500 mg c/20", medicamentos, "35", "12"))?;
-    let amoxicilina = bd.crear_producto(&producto("AMX-500", "Amoxicilina 500 mg c/12", medicamentos, "89", "38"))?;
+    let amoxicilina = bd.crear_producto(&DatosProducto {
+        con_receta: true, // antibiótico
+        ..producto("AMX-500", "Amoxicilina 500 mg c/12", medicamentos, "89", "38")
+    })?;
     let ibuprofeno = bd.crear_producto(&producto("IBU-400", "Ibuprofeno 400 mg c/10", medicamentos, "42", "15"))?;
     let jarabe = bd.crear_producto(&producto("JRB-120", "Jarabe para la tos 120 ml", medicamentos, "78", "31"))?;
     let shampoo = bd.crear_producto(&producto("SHA-400", "Shampoo anticaspa 400 ml", higiene, "65", "40"))?;

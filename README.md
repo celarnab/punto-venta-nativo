@@ -36,6 +36,9 @@ navegador ni web view.
   caduca primero va arriba; lo caducado o agotado no aparece) y sale en el ticket. Lo caducado se avisa en el menú
   y se **retira** desde *Productos → Caducidades*: sale del inventario y su costo cuenta como pérdida en los
   reportes, que puede dejar la utilidad en negativo. El Excel del catálogo trae una hoja «Lotes».
+- **Farmacias: venta con receta**. Un producto marcado «Venta con receta» sale con esa insignia en la venta, y
+  para cobrar el cajero confirma que el cliente presentó una receta médica válida. En Excel es la columna
+  «Con receta» (Sí/No), al importar y al exportar.
 - **Impresión**: los tickets van **directo a la impresora térmica** en ESC/POS, sin diálogos, y pueden abrir el
   cajón de dinero. Sin impresora térmica salen en PDF. La cotización en hoja carta siempre es PDF.
 - **Respaldos**: uno automático cada día (se conservan 30), manual cuando se quiera, y **restaurar una base completa**

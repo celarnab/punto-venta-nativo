@@ -332,7 +332,7 @@ pub fn conectar(app: &App, estado: Compartido) {
             }
         }
     });
-    conectar!(api, app, estado, on_cobrar, |app, e, lineas, pin| cobrar(&app, &mut e, lineas, &pin));
+    conectar!(api, app, estado, on_cobrar, |app, e, lineas, pin, receta| cobrar(&app, &mut e, lineas, &pin, receta));
     conectar!(api, app, estado, on_imprimir_cobrada, |app, e| {
         if let Some(id) = e.cobrada {
             imprimir_ticket(&app, &e, id, false);
@@ -741,10 +741,10 @@ pub fn conectar(app: &App, estado: Compartido) {
         }
         let nombre = format!("productos-{}.xlsx", vista::hoy());
         if let Some(ruta) = guardar_como("Excel", "xlsx", &nombre) {
-            let lotes = if es_farmacia(&e) { e.bd.todos_los_lotes() } else { Ok(Vec::new()) };
+            let lotes = if es_farmacia(&e) { e.bd.todos_los_lotes().map(Some) } else { Ok(None) };
             let resultado = lotes
                 .and_then(|lotes| Ok((e.bd.buscar_productos("", false, 100_000)?, lotes)))
-                .and_then(|(productos, lotes)| exportacion::productos_a_excel(&productos, &lotes))
+                .and_then(|(productos, lotes)| exportacion::productos_a_excel(&productos, lotes.as_deref()))
                 .and_then(|bytes| escribir(&ruta, bytes));
             texto_de(&app, resultado.map(|()| "Catálogo exportado."));
         }
@@ -974,7 +974,20 @@ fn refrescar_inicio(app: &App, e: &Estado) {
     api.set_fecha_larga(fecha_larga(vista::hoy()).into());
     api.set_giros(vista::modelo(Giro::TODOS.iter().map(|g| SharedString::from(g.etiqueta()))));
     api.set_es_farmacia(es_farmacia(e));
+    let (busqueda, cotizacion) = ejemplos(e.bd.negocio().map(|n| n.giro).unwrap_or(Giro::Abarrotes));
+    api.set_ejemplo_busqueda(busqueda.into());
+    api.set_ejemplo_cotizacion(cotizacion.into());
     refrescar_caducados(app, e);
+}
+
+/// Ejemplos que se ven en la venta, con productos que tiene ese tipo de negocio: cómo agregar varios en la
+/// búsqueda, y una nota para una cotización.
+fn ejemplos(giro: Giro) -> (&'static str, &'static str) {
+    match giro {
+        Giro::Abarrotes => ("3*refresco agrega 3 · 0.5*queso medio kilo", "Pedido para la fiesta del sábado"),
+        Giro::Ferreteria => ("3*martillo agrega 3 · 0.5*clavo medio kilo", "Obra de la calle 5"),
+        Giro::Farmacia => ("2*paracetamol agrega 2 · 3*aspirina agrega 3", "Pedido del consultorio"),
+    }
 }
 
 /// El tipo de negocio que está en la posición `indice` de la lista de la pantalla.
@@ -1164,7 +1177,7 @@ fn agregar(app: &App, e: &mut Estado, producto: i64, cantidad: Cantidad, precio:
     mostrar_venta(app, e, resultado);
 }
 
-fn cobrar(app: &App, e: &mut Estado, lineas: slint::ModelRc<CobroUi>, pin: &str) -> RespuestaUi {
+fn cobrar(app: &App, e: &mut Estado, lineas: slint::ModelRc<CobroUi>, pin: &str, receta: bool) -> RespuestaUi {
     const METODOS: [Metodo; 3] = [Metodo::Efectivo, Metodo::Tarjeta, Metodo::Transferencia];
     let cobros: Resultado<Vec<Cobro>> = lineas
         .iter()
@@ -1182,7 +1195,7 @@ fn cobrar(app: &App, e: &mut Estado, lineas: slint::ModelRc<CobroUi>, pin: &str)
             Err(error) => return fallo(error),
         },
     };
-    let resultado = venta_actual(e).and_then(|venta| e.bd.cobrar(venta, &cobros, autorizacion));
+    let resultado = venta_actual(e).and_then(|venta| e.bd.cobrar_con_receta(venta, &cobros, autorizacion, receta));
     match resultado {
         Ok(venta) => {
             let api = app.global::<Api>();
@@ -1409,6 +1422,7 @@ fn abrir_editor(app: &App, e: &mut Estado, id: i64) {
             stock_maximo: texto_de(p.stock_maximo).into(),
             alerta: texto_de(p.alerta_stock).into(),
             activo: p.activo,
+            con_receta: p.con_receta,
             existencia: p.existencia.to_string().into(),
             sin_lote: e.bd.existencia_sin_lote(p.id).unwrap_or_default().to_string().into(),
             precios: vista::modelo([]),
@@ -1513,6 +1527,7 @@ fn datos_producto(e: &Estado, editor: &EditorProductoUi) -> Resultado<DatosProdu
         stock_maximo: opcional(&editor.stock_maximo)?,
         alerta_stock: opcional(&editor.alerta)?,
         activo: editor.activo,
+        con_receta: editor.con_receta,
         precios,
     })
 }
